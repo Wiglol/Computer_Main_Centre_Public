@@ -1485,38 +1485,101 @@ def handle_command(s: str):
     m = re.match(r"^search\s+'([^']+)'$", s, re.I)
     if m: search_text(m.group(1)); return
 
-    # File ops
+    # ---------- File operations ----------
     m = re.match(r"^create\s+file\s+'([^']+)'\s+in\s+'([^']+)'(?:\s+with\s+text='(.*)')?$", s, re.I)
-    if m: op_create_file(m.group(1), m.group(2), m.group(3)); return
-    m = re.match(r"^create\s+folder\s+'([^']+)'\s+in\s+'([^']+)'$", s, re.I)
-    if m: op_create_folder(m.group(1), m.group(2)); return
-    m = re.match(r"^write\s+'([^']+)'\s+text='(.*)'$", s, re.I)
-    if m: op_write(m.group(1), m.group(2)); return
-    m = re.match(r"^read\s+'([^']+)'(?:\s+head=(\d+))?$", s, re.I)
-    if m: op_read(m.group(1), int(m.group(2)) if m.group(2) else None); return
-    m = re.match(r"^move\s+'([^']+)'\s+to\s+'([^']+)'$", s, re.I)
-    if m: op_move(m.group(1), m.group(2)); return
-    m = re.match(r"^copy\s+'([^']+)'\s+to\s+'([^']+)'$", s, re.I)
-    if m: op_copy(m.group(1), m.group(2)); return
-    m = re.match(r"^rename\s+'([^']+)'\s+to\s+'([^']+)'$", s, re.I)
-    if m: op_rename(m.group(1), m.group(2)); return
-    m = re.match(r"^delete\s+'([^']+)'$", s, re.I)
-    if m: op_delete(m.group(1)); return
-    m = re.match(r"^zip\s+'([^']+)'$", s, re.I)
-    if m: op_zip(m.group(1)); return
-    m = re.match(r"^unzip\s+'([^']+)'\s+to\s+'([^']+)'$", s, re.I)
-    if m: op_unzip(m.group(1), m.group(2)); return
-    m = re.match(r"^open\s+'([^']+)'$", s, re.I)
-    if m: op_open(m.group(1)); return
-    m = re.match(r"^explore\s+'([^']+)'$", s, re.I)
-    if m: op_explore(m.group(1)); return
-    m = re.match(r"^backup\s+'([^']+)'\s+'([^']+)'$", s, re.I)
-    if m: op_backup(m.group(1), m.group(2)); return
-    m = re.match(r"^run\s+'([^']+)'$", s, re.I)
-    if m: op_run(m.group(1)); return
+    if m:
+        op_create_file(m.group(1), m.group(2), m.group(3))
+        return
 
-        # ---------- Internet (now supports both quoted and unquoted URLs/paths) ----------
-    # downloadlist
+    m = re.match(r"^create\s+folder\s+'([^']+)'\s+in\s+'([^']+)'$", s, re.I)
+    if m:
+        op_create_folder(m.group(1), m.group(2))
+        return
+
+    m = re.match(r"^write\s+'([^']+)'\s+text='(.*)'$", s, re.I)
+    if m:
+        op_write(m.group(1), m.group(2))
+        return
+
+    m = re.match(r"^read\s+'([^']+)'(?:\s+head=(\d+))?$", s, re.I)
+    if m:
+        op_read(m.group(1), int(m.group(2)) if m.group(2) else None)
+        return
+
+    m = re.match(r"^move\s+'([^']+)'\s+to\s+'([^']+)'$", s, re.I)
+    if m:
+        op_move(m.group(1), m.group(2))
+        return
+
+    m = re.match(r"^copy\s+'([^']+)'\s+to\s+'([^']+)'$", s, re.I)
+    if m:
+        op_copy(m.group(1), m.group(2))
+        return
+
+    m = re.match(r"^rename\s+'([^']+)'\s+to\s+'([^']+)'$", s, re.I)
+    if m:
+        op_rename(m.group(1), m.group(2))
+        return
+
+    m = re.match(r"^delete\s+'([^']+)'$", s, re.I)
+    if m:
+        op_delete(m.group(1))
+        return
+
+    m = re.match(r"^zip\s+'([^']+)'$", s, re.I)
+    if m:
+        op_zip(m.group(1))
+        return
+
+    m = re.match(r"^unzip\s+'([^']+)'\s+to\s+'([^']+)'$", s, re.I)
+    if m:
+        op_unzip(m.group(1), m.group(2))
+        return
+
+    m = re.match(r"^open\s+'([^']+)'$", s, re.I)
+    if m:
+        op_open(m.group(1))
+        return
+
+    m = re.match(r"^explore\s+'([^']+)'$", s, re.I)
+    if m:
+        op_explore(m.group(1))
+        return
+
+    m = re.match(r"^backup\s+'([^']+)'\s+'([^']+)'$", s, re.I)
+    if m:
+        op_backup(m.group(1), m.group(2))
+        return
+
+    # --- Universal run command (supports optional 'in <path>' working directory) ---
+    m = re.match(r"^run\s+'([^']+)'\s*(?:in\s+'([^']+)')?$", s, re.I)
+    if m:
+        target = Path(m.group(1)).expanduser()
+        workdir = Path(m.group(2)).expanduser() if m.group(2) else target.parent
+        ext = target.suffix.lower()
+        try:
+            cwd = str(workdir)
+            if ext == ".py":
+                subprocess.run(["python", str(target)], cwd=cwd, shell=True)
+            elif ext in (".bat", ".cmd"):
+                subprocess.run([str(target)], cwd=cwd, shell=True)
+            elif ext == ".vbs":
+                subprocess.run(["wscript", str(target)], cwd=cwd, shell=True)
+            elif ext == ".exe":
+                os.startfile(str(target))
+            else:
+                # fallback — open any file with system handler
+                os.startfile(str(target))
+            p(f"🚀 Launched: {target} (cwd={cwd})")
+        except Exception as e:
+            p(f"[red]❌ Failed to run:[/red] {e}")
+        return
+
+
+
+
+
+    # ---------- Internet (supports quoted/unquoted URLs or paths) ----------
     m = re.match(r"^downloadlist\s+(?:'([^']+)'|(\S+))\s+to\s+(?:'([^']+)'|(\S+))$", s, re.I)
     if m:
         src = m.group(1) or m.group(2)
@@ -1524,7 +1587,6 @@ def handle_command(s: str):
         op_download_list(src, dest)
         return
 
-    # download
     m = re.match(r"^download\s+(?:'([^']+)'|(\S+))\s+to\s+(?:'([^']+)'|(\S+))$", s, re.I)
     if m:
         src = m.group(1) or m.group(2)
@@ -1532,12 +1594,12 @@ def handle_command(s: str):
         op_download(src, dest)
         return
 
-    # open url
     m = re.match(r"^open\s+url\s+(?:'([^']+)'|(\S+))$", s, re.I)
     if m:
         url = m.group(1) or m.group(2)
         op_open_url(url)
         return
+
 
 
     # Unknown / partial
