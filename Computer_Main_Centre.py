@@ -631,7 +631,7 @@ def show_header():
     # ensure Java line updates dynamically
     java_version = STATE.get("java_version") or detect_java_version()
     java_line = f"Java: {java_version} (Active)"
-    content = f"Local AI command console\n{status}\n{hint_line}\n{java_line}"
+    content = f"Local command console\n{status}\n{hint_line}\n{java_line}"
 
     if RICH:
         console.print(f"[bold]{title_line}[/bold]")
@@ -1184,7 +1184,7 @@ def macro_add(name: str, text: str):
     if name in MACROS and not STATE["batch"]:
         if not confirm(f"Macro '{name}' exists. Overwrite?"):
             p("[yellow]Canceled.[/yellow]"); return
-    MACROS[name] = text
+    MACROS[name] = text.replace(';', ' ; ')
     macros_save(MACROS)
     log_action(f"MACRO ADD {name} = {text}")
     p(f"[green]✅ Macro saved:[/green] {name}")
@@ -1268,6 +1268,7 @@ def handle_command(s: str):
         except EOFError:
             pass
 
+    # Always normalize once the command string is ready
     low = s.lower()
 
     # Control
@@ -1275,34 +1276,56 @@ def handle_command(s: str):
         return show_help()
     if low == "status":
         status_panel(); return
-    if low == "batch on": STATE["batch"] = True; log_action("BATCH ON"); p("Batch ON"); return
-    if low == "batch off": STATE["batch"] = False; log_action("BATCH OFF"); p("Batch OFF"); return
-    if low == "dry-run on": STATE["dry_run"] = True; p("Dry-Run ON"); return
-    if low == "dry-run off": STATE["dry_run"] = False; p("Dry-Run OFF"); return
-    if low == "ssl on": STATE["ssl_verify"] = True; p("SSL ON"); return
-    if low == "ssl off": STATE["ssl_verify"] = False; p("⚠️ SSL verification OFF — allowing untrusted/expired certs"); return
-    if low == "log": op_log(); return
-    if low == "undo": op_undo(); return
+    if low == "batch on":
+        STATE["batch"] = True; log_action("BATCH ON"); p("Batch ON"); return
+    if low == "batch off":
+        STATE["batch"] = False; log_action("BATCH OFF"); p("Batch OFF"); return
+    if low == "dry-run on":
+        STATE["dry_run"] = True; p("Dry-Run ON"); return
+    if low == "dry-run off":
+        STATE["dry_run"] = False; p("Dry-Run OFF"); return
+    if low == "ssl on":
+        STATE["ssl_verify"] = True; p("SSL ON"); return
+    if low == "ssl off":
+        STATE["ssl_verify"] = False; p("⚠️ SSL verification OFF — allowing untrusted/expired certs"); return
+    if low == "log":
+        op_log(); return
+    if low == "undo":
+        op_undo(); return
 
     # Exit
     if low == "exit":
         sys.exit(0)
 
-    # Git commands
-    if handle_git_commands(s, low):
+    # NEW: simple echo command (so macros can print messages)
+    m = re.match(r'^echo\s+["“](.+?)["”]$', s, re.I)
+    if m:
+        p(m.group(1))
         return
+
+    # Git commands (only trigger on /git...)
+    if low.startswith("/git"):
+        if handle_git_commands(s, low):
+            return
 
     # Macros (inline)
     m = re.match(r"^macro\s+add\s+([A-Za-z0-9_\-]+)\s*=\s*(.+)$", s, re.I)
-    if m: macro_add(m.group(1), m.group(2)); return
+    if m:
+        macro_add(m.group(1), m.group(2))
+        return
     m = re.match(r"^macro\s+run\s+([A-Za-z0-9_\-]+)$", s, re.I)
-    if m: macro_run(m.group(1)); return
+    if m:
+        macro_run(m.group(1))
+        return
     m = re.match(r"^macro\s+delete\s+([A-Za-z0-9_\-]+)$", s, re.I)
-    if m: macro_delete(m.group(1)); return
-    if re.match(r"^macro\s+list$", s, re.I): macro_list(); return
-    if re.match(r"^macro\s+clear$", s, re.I): macro_clear(); return
+    if m:
+        macro_delete(m.group(1))
+        return
+    if re.match(r"^macro\s+list$", s, re.I):
+        macro_list(); return
+    if re.match(r"^macro\s+clear$", s, re.I):
+        macro_clear(); return
 
-    if low == "exit": sys.exit(0)
 
 
     # Navigation
@@ -1633,25 +1656,45 @@ def show_help():
 # ---------- Main loop ----------
 def split_commands(line: str):
     parts = []
-    buf = []; q = None
+    buf = []
+    q = None
+    in_macro_add = False
     i = 0
+
     while i < len(line):
         ch = line[i]
+
         if q:
+            # we're inside a quoted string
             if ch == q:
                 q = None
             buf.append(ch)
         else:
+            # not in quotes
+            # detect "macro add" at the beginning of the line buffer
+            if not in_macro_add:
+                # look at the current buffer (trim leading spaces) in lowercase
+                temp = "".join(buf).lstrip().lower()
+                # once a line starts with "macro add", we stop splitting on ';'
+                if temp.startswith("macro add"):
+                    in_macro_add = True
+
             if ch in ("'", '"'):
-                q = ch; buf.append(ch)
-            elif ch == ";":
-                parts.append("".join(buf).strip()); buf = []
+                q = ch
+                buf.append(ch)
+            elif ch == ";" and not in_macro_add:
+                # split commands on ';' unless we're in a macro add line
+                parts.append("".join(buf).strip())
+                buf = []
             else:
                 buf.append(ch)
+
         i += 1
+
     if buf:
         parts.append("".join(buf).strip())
     return parts
+
 
 import shlex
 
@@ -1676,3 +1719,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# // test: autopublish propagation checkssssssssssssss
