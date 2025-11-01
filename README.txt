@@ -12,7 +12,7 @@ A local command console for safe file automation, Git integration, and instant p
    ✔ Check “Add Python to PATH” during setup
 
 2. Open Command Prompt and install dependencies:
-   pip install rich requests flask rapidfuzz watchdog pyautogui pygetwindow
+   pip install rich requests flask rapidfuzz watchdog pyautogui pygetwindow colorama gitpython
 
 3. (Optional) Install **Git for Windows**  
    → https://git-scm.com/download/win
