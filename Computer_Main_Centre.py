@@ -11,9 +11,26 @@
 #  - Macros (add / run / list / delete / clear) persisted to %USERPROFILE%\.ai_helper\macros.json
 # ==============================================
 
-import os, sys, re, fnmatch, shutil, zipfile, subprocess, datetime, time, json, threading
+# ---------- Imports ----------
+import os, sys, re, fnmatch, shutil, zipfile, subprocess, datetime, time, json, threading, glob
 from pathlib import Path
 from urllib.parse import urlparse
+
+# Advanced prompt with live autocompletion
+from prompt_toolkit import PromptSession
+from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.styles import Style
+
+
+# ✅ Cross-platform readline import (for Windows autocompletion)
+try:
+    import readline
+except ImportError:
+    try:
+        import pyreadline3 as readline
+    except ImportError:
+        readline = None
+
 
 # ---------- Optional dependencies ----------
 RICH = False
@@ -1823,15 +1840,163 @@ def split_commands(line: str):
 
 import shlex
 
+
+# ---------- Command Autocompletion ----------
+
+def complete_path(text, state):
+    """Auto-complete file and folder paths when typing quoted paths."""
+    if text.startswith(("'", '"')):
+        quote = text[0]
+        text = text[1:]
+    else:
+        quote = ''
+
+    pattern = text + '*' if text else '*'
+    matches = glob.glob(pattern)
+    results = [f"{quote}{m.replace('\\', '/')}" for m in matches]
+
+    # Append a trailing slash for directories
+    results = [r + ('/' if os.path.isdir(r.strip("'\"")) else '') for r in results]
+    return results[state] if state < len(results) else None
+
+
+def complete_command(text, state):
+    """Autocomplete for commands, macros, git commands, and paths."""
+    cmds = [
+        "pwd", "cd", "back", "home", "list", "info", "find", "findext",
+        "recent", "biggest", "search", "create file", "create folder",
+        "write", "read", "move", "copy", "rename", "delete", "zip",
+        "unzip", "open", "explore", "backup", "run", "download",
+        "downloadlist", "open url", "batch on", "batch off", "dry-run on",
+        "dry-run off", "ssl on", "ssl off", "status", "log", "undo",
+        "macro add", "macro run", "macro list", "macro delete", "macro clear",
+        "/gitsetup", "/gitlink", "/gitupdate", "/gitpull", "/gitstatus",
+        "/gitlog", "/gitbranch", "/gitignore add", "/gitclean", "/gitdoctor",
+        "/gitfix", "/gitlfs setup", "/qfind", "/qcount", "/qbuild",
+        "java list", "java version", "java change", "java reload",
+        "sleep", "sendkeys", "help", "exit"
+    ]
+    cmds += list(MACROS.keys())  # include macro names
+
+    if text.startswith(("'", '"')):
+        return complete_path(text, state)
+
+    results = [c for c in cmds if c.lower().startswith(text.lower())]
+    return results[state] if state < len(results) else None
+
+
+def setup_autocomplete():
+    if readline is None:
+        print("(Autocomplete disabled — readline not available)")
+        return
+
+    readline.set_completer_delims(' \t\n')
+    readline.set_completer(complete_command)
+    readline.parse_and_bind("tab: complete")
+
+    # 🪄 Patch TAB key to trigger inline insert behavior
+    # This works by overriding readline's key bindings
+    try:
+        readline.parse_and_bind('"\t": complete')  # standard bind
+        # Replace readline's default completer handler
+        readline.set_completion_display_matches_hook(
+            lambda substitution, matches, longest_match_length:
+                complete_and_insert()
+        )
+    except Exception:
+        pass
+
+    
+# ---------- Inline completion helper (Windows-friendly) ----------
+
+def complete_and_insert():
+    """Force inline completion instead of just listing matches."""
+    if readline is None:
+        return
+    buffer = readline.get_line_buffer()
+    cursor = readline.get_endidx()
+    matches = []
+    state = 0
+    while True:
+        res = complete_command(buffer, state)
+        if res is None:
+            break
+        matches.append(res)
+        state += 1
+    if len(matches) == 1:
+        # single match → auto-insert remainder
+        match = matches[0]
+        remainder = match[len(buffer):]
+        if remainder:
+            sys.stdout.write(remainder)
+            sys.stdout.flush()
+            readline.insert_text(remainder)
+    elif len(matches) > 1:
+        # multiple matches → show them like bash
+        print()
+        print("  ".join(matches))
+        readline.redisplay()
+
+
+
+
+# ---------- Advanced input with live autocomplete ----------
+from prompt_toolkit import PromptSession
+from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.styles import Style
+
+def build_completer():
+    cmds = [
+        "pwd","cd","back","home","list","info","find","findext","recent","biggest","search",
+        "create file","create folder","write","read","move","copy","rename","delete","zip","unzip",
+        "open","explore","backup","run","download","downloadlist","open url","batch on","batch off",
+        "dry-run on","dry-run off","ssl on","ssl off","status","log","undo",
+        "macro add","macro run","macro list","macro delete","macro clear",
+        "/gitsetup","/gitlink","/gitupdate","/gitpull","/gitstatus","/gitlog","/gitbranch",
+        "/gitignore add","/gitclean","/gitdoctor","/gitfix","/gitlfs setup",
+        "/qfind","/qcount","/qbuild","java list","java version","java change","java reload",
+        "sleep","sendkeys","help","exit"
+    ]
+    cmds += list(MACROS.keys())
+    return WordCompleter(cmds, ignore_case=True)
+
+# create a prompt session
+session = PromptSession()
+
+# 🎨 CMC cyan theme style
+style = Style.from_dict({
+        # Prompt label text
+    "prompt": "#00ffff bold",
+
+    # Regular suggestions (cyan text, transparent dark background)
+    "completion-menu.completion": "bg:#1a1a1a #00ffff",
+
+    # The currently highlighted / selected completion
+    "completion-menu.completion.current": "bg:#0033cc #ffffff",
+
+    # Scrollbar (dark blue track + blue handle)
+    "scrollbar.background": "bg:#0d0d0d",
+    "scrollbar.button": "bg:#0033cc",
+})  # ✅ <-- closing both parentheses
+
+
+
+
 def main():
     global CWD
     show_header()
+    completer = build_completer()
     while True:
         try:
-            prompt = f"CMC>{str(CWD)}> "
-            line = input(prompt)
+            line = session.prompt(
+                f"CMC>{CWD}> ",
+                completer=completer,
+                complete_while_typing=True,
+                style=style
+            )
         except (EOFError, KeyboardInterrupt):
-            print(); break
+            print()
+            break
         for part in split_commands(line):
             try:
                 handle_command(part)
@@ -1839,6 +2004,7 @@ def main():
                 raise
             except Exception as e:
                 p(f"[red]❌ Error:[/red] {e}" if RICH else f"Error: {e}")
+
 
 
 

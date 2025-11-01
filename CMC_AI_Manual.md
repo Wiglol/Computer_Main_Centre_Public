@@ -210,8 +210,8 @@ Steps:
 1. Install Python 3 (add to PATH).  
 2. In Command Prompt:
    ```bash
-   pip install rich requests flask rapidfuzz watchdog pyautogui pygetwindow
-   ```
+   pip install rich requests pyautogui prompt_toolkit
+
 3. (Optional) Install Git for Windows:
    https://git-scm.com/download/win
 
