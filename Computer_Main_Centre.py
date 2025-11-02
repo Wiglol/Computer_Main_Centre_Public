@@ -13,6 +13,8 @@
 
 # ---------- Imports ----------
 import os, sys, re, fnmatch, shutil, zipfile, subprocess, datetime, time, json, threading, glob
+import webbrowser
+import urllib.parse
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -577,6 +579,27 @@ MACROS_FILE = DATA_DIR / "macros.json"
 if not MACROS_FILE.exists():
     MACROS_FILE.write_text("{}", encoding="utf-8")
 
+# ---------- Aliases (persistent) ----------
+ALIAS_FILE = Path(os.path.expanduser("~/.ai_helper/aliases.json"))
+ALIASES = {}
+
+def load_aliases():
+    """Load alias list from ~/.ai_helper/aliases.json"""
+    global ALIASES
+    if ALIAS_FILE.exists():
+        try:
+            with open(ALIAS_FILE, "r", encoding="utf-8") as f:
+                ALIASES = json.load(f)
+        except Exception:
+            ALIASES = {}
+    else:
+        ALIASES = {}
+
+def save_aliases():
+    """Save alias list"""
+    ALIAS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(ALIAS_FILE, "w", encoding="utf-8") as f:
+        json.dump(ALIASES, f, indent=2)
 
 # ---------- Helpers ----------
 def p(x):
@@ -644,7 +667,7 @@ def show_header():
         f"SSL: {'ON' if STATE['ssl_verify'] else 'OFF'}  |  "
         f"Dry-Run: {'OFF' if not STATE['dry_run'] else 'ON'}"
     )
-    hint_line = "🧭 Explore commands with ‘help’"
+    hint_line = "Explore commands with ‘help’"
     # ensure Java line updates dynamically
     java_version = STATE.get("java_version") or detect_java_version()
     java_line = f"Java: {java_version} (Active)"
@@ -1173,6 +1196,60 @@ def op_undo():
     except Exception as e:
         p(f"[red]❌ Undo failed:[/red] {e}" if RICH else f"Undo failed: {e}")
 
+
+# ---------- Auto-detect installed Java versions ----------
+def detect_java_versions():
+    """Scan registry and common folders for Java installations."""
+    detected = {}
+
+    try:
+        import winreg
+        reg_paths = [
+            r"SOFTWARE\\Eclipse Adoptium",
+            r"SOFTWARE\\JavaSoft\\Java Development Kit",
+            r"SOFTWARE\\JavaSoft\\JDK",
+            r"SOFTWARE\\JavaSoft\\Java Runtime Environment",
+        ]
+        for root in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+            for path in reg_paths:
+                try:
+                    with winreg.OpenKey(root, path) as key:
+                        i = 0
+                        while True:
+                            try:
+                                sub = winreg.EnumKey(key, i)
+                                with winreg.OpenKey(key, sub) as subkey:
+                                    try:
+                                        home, _ = winreg.QueryValueEx(subkey, "JavaHome")
+                                        if Path(home).exists():
+                                            detected[sub] = home
+                                    except FileNotFoundError:
+                                        pass
+                            except OSError:
+                                break
+                            i += 1
+                except FileNotFoundError:
+                    continue
+    except Exception:
+        pass
+
+    # Folder scan fallback
+    search_roots = [
+        Path("C:/Program Files/Eclipse Adoptium"),
+        Path("C:/Program Files/Java"),
+        Path("C:/Program Files (x86)/Java"),
+    ]
+    for root in search_roots:
+        if root.exists():
+            for sub in root.iterdir():
+                if sub.is_dir() and ("jdk" in sub.name.lower() or "jre" in sub.name.lower()):
+                    detected[sub.name] = str(sub)
+
+    return detected
+
+JAVA_VERSIONS = detect_java_versions()
+
+
 # ---------- Macros (persistent) ----------
 def macros_load():
     try:
@@ -1185,19 +1262,29 @@ def macros_load():
 def macros_save(d: dict):
     MACROS_FILE.parent.mkdir(exist_ok=True)
     MACROS_FILE.write_text(json.dumps(d, indent=2), encoding="utf-8")
+    
 
+
+# 🚨 Keep these two exactly at column 0 (no spaces/tabs before them)
 MACROS = macros_load()
+load_aliases()
 
 def expand_vars(s: str) -> str:
     today = datetime.date.today().isoformat()
     now = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     home = str(Path.home())
-    return s.replace("%DATE%", today).replace("%NOW%", now).replace("%HOME%", home)
+    return (
+        s.replace("%DATE%", today)
+         .replace("%NOW%", now)
+         .replace("%HOME%", home)
+    )
 
 def macro_add(name: str, text: str):
     name = name.strip()
-    if not name: p("[red]Macro name required.[/red]"); return
-    if not text.strip(): p("[red]Macro command text required.[/red]"); return
+    if not name:
+        p("[red]Macro name required.[/red]"); return
+    if not text.strip():
+        p("[red]Macro command text required.[/red]"); return
     if name in MACROS and not STATE["batch"]:
         if not confirm(f"Macro '{name}' exists. Overwrite?"):
             p("[yellow]Canceled.[/yellow]"); return
@@ -1246,6 +1333,7 @@ def macro_clear():
     log_action("MACRO CLEAR ALL")
     p("[green]✅ Cleared all macros.[/green]")
 
+
 # ---------- Suggestions for partial commands ----------
 COMMAND_HINTS = [
     "pwd","cd","back","home","list","info","find","findext","count","recent","biggest","search",
@@ -1271,41 +1359,64 @@ def suggest_commands(s: str):
     else:
         print("Suggestions:", ", ".join(cands[:10]))
 
- # ---------- Handle Commands ----------
 def handle_command(s: str):
     s = s.strip()
     if not s:
         return
 
-    # 🩹 Fix for broken multi-line commands (AI sometimes splits "download ... to" and "C:/Downloads")
+        # ---------- Alias expansion ----------
+    parts = s.split(maxsplit=1)
+    if parts and parts[0] in ALIASES:
+        alias_cmd = ALIASES[parts[0]]
+        rest = parts[1] if len(parts) > 1 else ""
+        # Combine alias expansion + remaining args
+        s = f"{alias_cmd} {rest}".strip()
+        p(f"[dim]↳ alias →[/dim] {s}")
+        
+            # ---------- Self test ----------
+    if s.lower() == "selftest commands":
+        try:
+            import inspect, re as _re
+            defined_ops = sorted([n for n, obj in globals().items()
+                                  if n.startswith("op_") and callable(obj)])
+            # Rough scan of this function's source for regex routes
+            src = inspect.getsource(handle_command)
+            routes = sorted(set(m.group(1).strip()
+                                for m in _re.finditer(r'^\s*m\s*=\s*re\.match\(\s*r"(\^.+?)"', src, _re.M)))
+            p("[cyan]Defined op_* functions:[/cyan]")
+            for n in defined_ops: p(f"  {n}")
+            p("\n[cyan]Regex routes in handle_command:[/cyan]")
+            for r in routes: p(f"  {r}")
+        except Exception as e:
+            p(f"[red]Selftest failed:[/red] {e}")
+        return
+
+
+
+    # Fix for broken multi-line commands (when a line ends with "to")
     if s.lower().endswith("to"):
         try:
-            nxt = input("... ")  # continue input
+            nxt = input("... ")
             s = s + " " + nxt.strip()
         except EOFError:
             pass
 
-    # Always normalize once the command string is ready
+    # Normalize once
     low = s.lower()
 
     # ---------- Utility automation commands ----------
-
-    # sleep <seconds> — pause macro or command chain
     m = re.match(r"^sleep\s+(\d+)$", s, re.I)
     if m:
         secs = int(m.group(1))
-        import time
         time.sleep(secs)
         p(f"😴 Slept for {secs} seconds")
         return
 
-    # sendkeys "<text>" — type text or simulate Enter keys
     m = re.match(r'^sendkeys\s+"(.+)"$', s, re.I)
     if m:
         try:
-            import pyautogui, time
+            import pyautogui
             keys = m.group(1)
-            # Handle {ENTER} placeholder
             if "{ENTER}" in keys.upper():
                 parts = re.split(r"\{ENTER\}", keys, flags=re.I)
                 for i, part in enumerate(parts):
@@ -1321,27 +1432,20 @@ def handle_command(s: str):
             p(f"[red]❌ Sendkeys failed:[/red] {e}")
         return
 
-     # --- Universal run command (supports optional 'in <path>' working directory and arguments) ---
+    # --- Universal run command (supports optional 'in <path>') ---
     m = re.match(r"^run\s+'(.+?)'\s*(?:in\s+'([^']+)')?$", s, re.I)
     if m:
         full_cmd = m.group(1).strip()
         workdir = Path(m.group(2)).expanduser() if m.group(2) else None
         try:
             cwd = str(workdir) if workdir else None
-            # Keep the command string intact so quoting (/c start "") is preserved
             subprocess.Popen(full_cmd, cwd=cwd, shell=True)
             p(f"🚀 Launched: {full_cmd}" + (f" (cwd={cwd})" if cwd else ""))
         except Exception as e:
             p(f"[red]❌ Failed to run:[/red] {e}")
         return
 
-
-
-
-
-
-
-    # Control
+    # ---------- Control ----------
     if low in ("help", "?"):
         return show_help()
     if low == "status":
@@ -1362,75 +1466,75 @@ def handle_command(s: str):
         op_log(); return
     if low == "undo":
         op_undo(); return
-
-    # Exit
     if low == "exit":
         sys.exit(0)
 
-    # NEW: simple echo command (so macros can print messages)
+    # Simple echo for macros
     m = re.match(r'^echo\s+["“](.+?)["”]$', s, re.I)
     if m:
-        p(m.group(1))
-        return
+        p(m.group(1)); return
 
-    # Git commands (only trigger on /git...)
+    # ---------- Git (/git...) ----------
     if low.startswith("/git"):
         if handle_git_commands(s, low):
             return
 
-    # Macros (inline)
-    m = re.match(r"^macro\s+add\s+([A-Za-z0-9_\-]+)\s*=\s*(.+)$", s, re.I)
+    # ---------- Alias Commands ----------
+    m = re.match(r"^alias\s+add\s+([A-Za-z0-9_\-]+)\s+(.+)$", s, re.I)
     if m:
-        macro_add(m.group(1), m.group(2))
+        name = m.group(1)
+        value = m.group(2)
+        ALIASES[name] = value
+        save_aliases()
+        p(f"[cyan]Alias added:[/cyan] {name} → {value}")
         return
-    m = re.match(r"^macro\s+run\s+([A-Za-z0-9_\-]+)$", s, re.I)
+
+    m = re.match(r"^alias\s+delete\s+([A-Za-z0-9_\-]+)$", s, re.I)
     if m:
-        macro_run(m.group(1))
-        return
-    m = re.match(r"^macro\s+delete\s+([A-Za-z0-9_\-]+)$", s, re.I)
-    if m:
-        macro_delete(m.group(1))
-        return
-    if re.match(r"^macro\s+list$", s, re.I):
-        macro_list(); return
-    if re.match(r"^macro\s+clear$", s, re.I):
-        macro_clear(); return
-
-
-
-    # Navigation
-    if low == "pwd": op_pwd(); return
-    m = re.match(r"^cd\s+'([^']+)'$", s, re.I)
-    if m: op_cd(m.group(1)); return
-    if low == "back": op_back(); return
-    if low == "home": op_home(); return
-
-    # List with optional args
-    if low.startswith("list"):
-        path = None
-        depth = 1
-        only = None
-        pattern = None
-        m = re.findall(r"(?:'([^']+)')|(\bdepth=\d+\b|\bonly=(?:files|dirs)\b|\bpattern=[^\s]+)", s)
-        for grp in m:
-            if grp[0]:
-                path = grp[0]
-            else:
-                flag = grp[1]
-                if flag.startswith("depth="):
-                    depth = int(flag.split("=")[1])
-                elif flag.startswith("only="):
-                    only = flag.split("=")[1]
-                elif flag.startswith("pattern="):
-                    pattern = flag.split("=", 1)[1]
-        op_list(path, depth, only, pattern)
+        name = m.group(1)
+        if name in ALIASES:
+            del ALIASES[name]
+            save_aliases()
+            p(f"[yellow]Alias removed:[/yellow] {name}")
+        else:
+            p(f"[red]Alias not found:[/red] {name}")
         return
 
-    # Java management
+    if re.match(r"^alias\s+list$", s, re.I):
+        if not ALIASES:
+            p("[dim]No aliases defined.[/dim]")
+        else:
+            for k, v in ALIASES.items():
+                p(f"[cyan]{k}[/cyan] → {v}")
+        return
+        
+            # ---------- Java management ----------
+    # Fallback helpers in case _apply_java_env / save_java_cfg aren't defined in this build
+    def _apply_java_env_local(home_path: str):
+        try:
+            _apply_java_env(home_path)  # existing helper (if present in your build)
+        except NameError:
+            # Minimal local apply for this process only
+            os.environ["JAVA_HOME"] = home_path
+            binp = str(Path(home_path) / "bin")
+            if binp not in os.environ.get("PATH", ""):
+                os.environ["PATH"] = os.environ.get("PATH", "") + ";" + binp
+
+    def _save_java_cfg_local(ver: str, home_path: str):
+        try:
+            save_java_cfg(ver, home_path)  # existing helper (if present)
+        except NameError:
+            pass  # no-op if not present
+
+  
+
     if low == "java list":
-        for k, v in JAVA_VERSIONS.items():
-            tag = "(installed)" if Path(v).exists() else "(missing)"
-            p(f"{k} -> {v} {tag}")
+        if not JAVA_VERSIONS:
+            p("[yellow]No JAVA_VERSIONS configured in this build.[/yellow]")
+        else:
+            for k, v in JAVA_VERSIONS.items():
+                tag = "(installed)" if Path(v).exists() else "(missing)"
+                p(f"{k} -> {v} {tag}")
         return
 
     if low == "java version":
@@ -1441,240 +1545,377 @@ def handle_command(s: str):
 
     if low == "java reload":
         try:
-            # Refresh environment from registry
-            home = subprocess.check_output(
+            # Try both user and system registry locations
+            new_home = None
+            for reg_cmd in [
                 'reg query "HKCU\\Environment" /v JAVA_HOME',
-                shell=True, text=True, stderr=subprocess.DEVNULL
-            )
-            m = re.search(r"JAVA_HOME\s+REG_SZ\s+(.+)", home)
-            if m:
-                new_home = m.group(1).strip()
-                _apply_java_env(new_home)
-                STATE["java_version"] = "?"
-                save_java_cfg("?", new_home)
-                p(f"🔄 Reloaded system Java from registry: {new_home}")
-                p("Close/reopen CMC if version text doesn’t update immediately.")
+                'reg query "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment" /v JAVA_HOME'
+            ]:
+                try:
+                    out = subprocess.check_output(
+                        reg_cmd, shell=True, text=True, stderr=subprocess.DEVNULL
+                    )
+                    m = re.search(r"JAVA_HOME\s+REG_SZ\s+(.+)", out)
+                    if m:
+                        new_home = m.group(1).strip()
+                        break
+                except subprocess.CalledProcessError:
+                    continue
+
+            if new_home and Path(new_home).exists():
+                _apply_java_env_local(new_home)
+                STATE["java_version"] = Path(new_home).name
+                _save_java_cfg_local(STATE["java_version"], new_home)
+                p(f"🔄 Reloaded Java from registry: {new_home}")
+                p(f"✅ Now active: {STATE['java_version']}")
             else:
-                p("No JAVA_HOME found in registry.")
+                p("[yellow]⚠️ No JAVA_HOME found in registry (user or system).[/yellow]")
         except Exception as e:
-            p(f"[WARN] Failed to reload Java: {e}")
+            p(f"[red]Reload failed:[/red] {e}")
         return
 
 
-
-
-    m = re.match(r"^java\s+change\s+(\d+)$", s, re.I)
+         # ---------- Improved Java change ----------
+    m = re.match(r"^java\s+change\s+(.+)$", s, re.I)
     if m:
-        ver = m.group(1)
-        home = JAVA_VERSIONS.get(ver)
-        if not home or not Path(home).exists():
-            p(f"Java {ver} not found at configured path.")
+        arg = m.group(1).strip().strip('"').strip("'")
+        target_path = None
+        chosen_key = None
+
+        # 1. Try direct key match (version or name)
+        if arg in JAVA_VERSIONS:
+            target_path = JAVA_VERSIONS[arg]
+            chosen_key = arg
+        else:
+            # 2. Try partial match (e.g. "17" matches "jdk-17.0.16.8-hotspot")
+            for k, v in JAVA_VERSIONS.items():
+                if arg in k or arg in v:
+                    target_path = v
+                    chosen_key = k
+                    break
+
+        # 3. If still not found, maybe it's a full path
+        if not target_path and Path(arg).exists():
+            target_path = arg
+            chosen_key = Path(arg).name
+
+        if not target_path or not Path(target_path).exists():
+            p(f"[red]Java version or path not found:[/red] {arg}")
             return
 
-        # --- Apply locally (for current CMC session) ---
-        _apply_java_env(home)
+        # Apply to current process
+        os.environ["JAVA_HOME"] = target_path
+        bin_path = str(Path(target_path) / "bin")
+        if bin_path not in os.environ["PATH"]:
+            os.environ["PATH"] += f";{bin_path}"
+        STATE["java_version"] = chosen_key or arg
+        _save_java_cfg_local(STATE["java_version"], target_path)
+
+
+        # Apply system-wide via setx
+        try:
+            subprocess.run(["setx", "JAVA_HOME", target_path],
+                           shell=True, check=True, text=True, capture_output=True)
+            subprocess.run(["setx", "PATH", f"%PATH%;{bin_path}"],
+                           shell=True, check=True, text=True, capture_output=True)
+            p(f"✅ Java set to: {chosen_key or target_path}")
+            p("⚙️ You can now run 'java reload' in CMC to refresh without reopening.")
+        except Exception as e:
+            p(f"[yellow]Setx warning:[/yellow] {e}")
+        return
+
+
+
+        # Apply to current process
+        _apply_java_env_local(home)
         STATE["java_version"] = ver
-        save_java_cfg(ver, home)
+        _save_java_cfg_local(ver, home)
 
-        # --- Apply system-wide via setx ---
+        # Apply system-wide (setx)
         try:
-            subprocess.run(
-                ["setx", "JAVA_HOME", home],
-                shell=True,
-                check=True,
-                text=True,
-                capture_output=True,
-            )
-
+            subprocess.run(["setx", "JAVA_HOME", home], shell=True, check=True,
+                           text=True, capture_output=True)
             bin_path = str(Path(home) / "bin")
-            subprocess.run(
-                ["setx", "PATH", f"%PATH%;{bin_path}"],
-                shell=True,
-                check=True,
-                text=True,
-                capture_output=True,
-            )
-
+            # Append bin to PATH
+            subprocess.run(["setx", "PATH", f"%PATH%;{bin_path}"], shell=True, check=True,
+                           text=True, capture_output=True)
             p(f"✅ Java {ver} set system-wide ({home})")
-            p("⚠️ Close and reopen any CMD/PowerShell windows for it to take effect.")
+            p("⚠️ Close and reopen terminals/apps to pick up new PATH.")
         except Exception as e:
-            p(f"[WARN] Could not update system PATH: {e}")
-
+            p(f"[yellow]Setx warning:[/yellow] {e}")
         return
-
-
-
-
-    # Local index quick find
-    m = re.match(r"^/qfind\s+(.+)$", s, re.I)
-    if m and _qpaths:
-        terms = m.group(1).strip()
-        rows = _qpaths(_DB_DEFAULT, terms, 20)
-        if not rows:
-            p("No results."); return
-        for pth, score in rows:
-            p(f"{pth} ({score}%)")
-        return
-    if low == "/qcount" and _qcount:
-        n = _qcount(_DB_DEFAULT)
-        p(f"Indexed paths: {n:,}"); p(f"DB: {_DB_DEFAULT}"); return
-    m = re.match(r"^/qbuild(?:\s+(.+))?$", s, re.I)
-    if m and _qbuild:
-        args = m.group(1).split() if m.group(1) else ["C:/Users/Wiggo","C","E","F"]
-        _qbuild(_DB_DEFAULT, args)
-        n = _qcount(_DB_DEFAULT) if _qcount else "?"
-        p(f"[DONE] Indexed paths now: {n}")
-        return
-    # Info
-    m = re.match(r"^info\s+'([^']+)'$", s, re.I)
+        
+            # ---------- File & Info operations ----------
+    # list ['path']
+    m = re.match(r"^list(?:\s+'(.+?)')?$", s, re.I)
     if m:
-        fp = resolve(m.group(1))
-        try:
-            st = fp.stat()
-            size = lc_size(st.st_size) if fp.is_file() else sum((p.stat().st_size for p in fp.rglob("*") if p.is_file()), 0)
-            size_str = lc_size(size)
-            modified = datetime.datetime.fromtimestamp(st.st_mtime)
-            if RICH:
-                console.print(Panel.fit(f"Name: {fp.name}\nType: {'file' if fp.is_file() else 'dir'}\nSize: {size_str}\nModified: {modified}",
-                                        title=str(fp)))
-            else:
-                print(fp, size_str, modified)
-        except Exception as e:
-            p(f"[red]❌ {e}[/red]" if RICH else f"Error: {e}")
-        return
+        op_list(m.group(1) if m.group(1) else None); return
 
-    # Find / search
-    m = re.match(r"^find\s+'([^']+)'$", s, re.I)
-    if m: find_name(m.group(1)); return
+    # info 'path'
+    m = re.match(r"^info\s+'(.+?)'$", s, re.I)
+    if m:
+        op_info(m.group(1)); return
+
+    # find 'name'
+    m = re.match(r"^find\s+'(.+?)'$", s, re.I)
+    if m:
+        op_find_name(m.group(1)); return
+
+    # findext '.ext'
     m = re.match(r"^findext\s+'?(\.[A-Za-z0-9]+)'?$", s, re.I)
-    if m: find_ext(m.group(1)); return
-    m = re.match(r"^recent(?:\s+'([^']+)')?$", s, re.I)
-    if m: recent_paths(m.group(1), limit=20); return
-    m = re.match(r"^biggest(?:\s+'([^']+)')?$", s, re.I)
-    if m: biggest_paths(m.group(1), limit=20); return
-    m = re.match(r"^search\s+'([^']+)'$", s, re.I)
-    if m: search_text(m.group(1)); return
+    if m:
+        op_find_ext(m.group(1)); return
 
-    # ---------- File operations ----------
-    m = re.match(r"^create\s+file\s+'([^']+)'\s+in\s+'([^']+)'(?:\s+with\s+text='(.*)')?$", s, re.I)
+    # recent ['path']
+    m = re.match(r"^recent(?:\s+'(.+?)')?$", s, re.I)
+    if m:
+        op_recent(m.group(1) if m.group(1) else None); return
+
+    # biggest ['path']
+    m = re.match(r"^biggest(?:\s+'(.+?)')?$", s, re.I)
+    if m:
+        op_biggest(m.group(1) if m.group(1) else None); return
+
+    # search 'text'
+    m = re.match(r"^search\s+'(.+?)'$", s, re.I)
+    if m:
+        op_search_text(m.group(1)); return
+
+    # create file 'name.txt' in 'C:/path' [with text="..."]
+    m = re.match(r"^create\s+file\s+'(.+?)'\s+in\s+'(.+?)'(?:\s+with\s+text=['\"](.+?)['\"])?$", s, re.I)
+    if m:
+        op_create_file(m.group(1), m.group(2), m.group(3)); return
+
+    # create folder 'Name' in 'C:/path'
+    m = re.match(r"^create\s+folder\s+'(.+?)'\s+in\s+'(.+?)'$", s, re.I)
+    if m:
+        op_create_folder(m.group(1), m.group(2)); return
+
+    # write 'C:/path/file.txt' text='hello'
+    m = re.match(r"^write\s+'(.+?)'\s+text=['\"](.+?)['\"]$", s, re.I)
+    if m:
+        op_write(m.group(1), m.group(2)); return
+
+    # read 'C:/path/file.txt' [head=50]
+    m = re.match(r"^read\s+'(.+?)'(?:\s+\[head=(\d+)\])?$", s, re.I)
+    if m:
+        op_read(m.group(1), int(m.group(2)) if m.group(2) else None); return
+
+    # move 'C:/src' to 'C:/dst'
+    m = re.match(r"^move\s+'(.+?)'\s+to\s+'(.+?)'$", s, re.I)
+    if m:
+        op_move(m.group(1), m.group(2)); return
+
+    # copy 'C:/src' to 'C:/dst'
+    m = re.match(r"^copy\s+'(.+?)'\s+to\s+'(.+?)'$", s, re.I)
+    if m:
+        op_copy(m.group(1), m.group(2)); return
+
+    # rename 'C:/old' to 'NewName'
+    m = re.match(r"^rename\s+'(.+?)'\s+to\s+'(.+?)'$", s, re.I)
+    if m:
+        op_rename(m.group(1), m.group(2)); return
+
+    # delete 'C:/path'
+    m = re.match(r"^delete\s+'(.+?)'$", s, re.I)
+    if m:
+        op_delete(m.group(1)); return
+
+    # zip 'C:/path'
+    m = re.match(r"^zip\s+'(.+?)'$", s, re.I)
+    if m:
+        op_zip(m.group(1)); return
+
+    # unzip 'C:/file.zip' to 'C:/dest'
+    m = re.match(r"^unzip\s+'(.+?)'\s+to\s+'(.+?)'$", s, re.I)
+    if m:
+        op_unzip(m.group(1), m.group(2)); return
+
+    # open 'C:/file-or-app'
+    m = re.match(r"^open\s+'(.+?)'$", s, re.I)
+    if m:
+        op_open(m.group(1)); return
+
+    # explore 'C:/path'
+    m = re.match(r"^explore\s+'(.+?)'$", s, re.I)
+    if m:
+        op_explore(m.group(1)); return
+
+    # backup 'C:/src' 'C:/dest'
+    m = re.match(r"^backup\s+'(.+?)'\s+'(.+?)'$", s, re.I)
+    if m:
+        op_backup(m.group(1), m.group(2)); return
+
+    # ---------- Internet ----------
+    # open url https://example.com  OR  open url 'https://...'
+    m = re.match(r"^open\s+url\s+(?:'([^']+)'|(\S+))$", s, re.I)
+    if m:
+        url = m.group(1) or m.group(2)
+        op_open_url(url); return
+
+    # download 'https://...' to 'C:/Downloads'
+    m = re.match(r"^download\s+'(.+?)'\s+to\s+'(.+?)'$", s, re.I)
+    if m:
+        op_download(m.group(1), m.group(2)); return
+
+    # downloadlist 'C:/urls.txt' to 'C:/Downloads'
+    m = re.match(r"^downloadlist\s+'(.+?)'\s+to\s+'(.+?)'$", s, re.I)
+    if m:
+        op_download_list(m.group(1), m.group(2)); return
+
+    # ---------- Run (already have your improved version; keep if missing) ----------
+    # run 'cmd or path' [in 'folder']
+    m = re.match(r"^run\s+'(.+?)'\s*(?:in\s+'([^']+)')?$", s, re.I)
+    if m:
+        full_cmd = m.group(1).strip()
+        workdir = Path(m.group(2)).expanduser() if m.group(2) else None
+        try:
+            cwd = str(workdir) if workdir else None
+            subprocess.Popen(full_cmd, cwd=cwd, shell=True)
+            p(f"🚀 Launched: {full_cmd}" + (f" (cwd={cwd})" if cwd else ""))
+        except Exception as e:
+            p(f"[red]❌ Failed to run:[/red] {e}")
+        return
+        
+            # ---------- Navigation ----------
+    if low in ("home", "cd home"):
+        op_home(); return
+
+    if low == "back":
+        op_back(); return
+
+    m = re.match(r"^cd\s+'(.+?)'$", s, re.I)
+    if m:
+        op_cd(m.group(1)); return
+
+    if low == "pwd":
+        op_pwd(); return
+
+    # ---------- Backup ----------
+    m = re.match(r"^backup\s+'(.+?)'\s+'(.+?)'$", s, re.I)
+    if m:
+        op_backup(m.group(1), m.group(2)); return
+
+    # ---------- Log / Undo ----------
+    if low == "log":
+        op_log(); return
+
+    if low == "undo":
+        op_undo(); return
+
+
+
+
+    # ---------- Macros (inline) ----------
+    m = re.match(r"^macro\s+add\s+([A-Za-z0-9_\-]+)\s*=\s*(.+)$", s, re.I)
+    if m: macro_add(m.group(1), m.group(2)); return
+    m = re.match(r"^macro\s+run\s+([A-Za-z0-9_\-]+)$", s, re.I)
+    if m: macro_run(m.group(1)); return
+    m = re.match(r"^macro\s+delete\s+([A-Za-z0-9_\-]+)$", s, re.I)
+    if m: macro_delete(m.group(1)); return
+    if re.match(r"^macro\s+list$", s, re.I): macro_list(); return
+    if re.match(r"^macro\s+clear$", s, re.I): macro_clear(); return
+    
+        # ---------- File Operations ----------
+    m = re.match(r"^create\s+file\s+'(.+?)'\s+in\s+'(.+?)'(?:\s+with\s+text=['\"](.+?)['\"])?$", s, re.I)
     if m:
         op_create_file(m.group(1), m.group(2), m.group(3))
         return
 
-    m = re.match(r"^create\s+folder\s+'([^']+)'\s+in\s+'([^']+)'$", s, re.I)
+    m = re.match(r"^create\s+folder\s+'(.+?)'\s+in\s+'(.+?)'$", s, re.I)
     if m:
         op_create_folder(m.group(1), m.group(2))
         return
 
-    m = re.match(r"^write\s+'([^']+)'\s+text='(.*)'$", s, re.I)
+    m = re.match(r"^write\s+'(.+?)'\s+text=['\"](.+?)['\"]$", s, re.I)
     if m:
         op_write(m.group(1), m.group(2))
         return
 
-    m = re.match(r"^read\s+'([^']+)'(?:\s+head=(\d+))?$", s, re.I)
+    m = re.match(r"^read\s+'(.+?)'(?:\s+\[head=(\d+)\])?$", s, re.I)
     if m:
         op_read(m.group(1), int(m.group(2)) if m.group(2) else None)
         return
 
-    m = re.match(r"^move\s+'([^']+)'\s+to\s+'([^']+)'$", s, re.I)
+    m = re.match(r"^move\s+'(.+?)'\s+to\s+'(.+?)'$", s, re.I)
     if m:
         op_move(m.group(1), m.group(2))
         return
 
-    m = re.match(r"^copy\s+'([^']+)'\s+to\s+'([^']+)'$", s, re.I)
+    m = re.match(r"^copy\s+'(.+?)'\s+to\s+'(.+?)'$", s, re.I)
     if m:
         op_copy(m.group(1), m.group(2))
         return
 
-    m = re.match(r"^rename\s+'([^']+)'\s+to\s+'([^']+)'$", s, re.I)
+    m = re.match(r"^rename\s+'(.+?)'\s+to\s+'(.+?)'$", s, re.I)
     if m:
         op_rename(m.group(1), m.group(2))
         return
 
-    m = re.match(r"^delete\s+'([^']+)'$", s, re.I)
+    m = re.match(r"^delete\s+'(.+?)'$", s, re.I)
     if m:
         op_delete(m.group(1))
         return
 
-    m = re.match(r"^zip\s+'([^']+)'$", s, re.I)
-    if m:
-        op_zip(m.group(1))
-        return
 
-    m = re.match(r"^unzip\s+'([^']+)'\s+to\s+'([^']+)'$", s, re.I)
-    if m:
-        op_unzip(m.group(1), m.group(2))
-        return
+    # ---------- Navigation ----------
+    # (keep your existing navigation / file ops / java / index handlers here...)
 
-    m = re.match(r"^open\s+'([^']+)'$", s, re.I)
-    if m:
-        op_open(m.group(1))
-        return
-
-    m = re.match(r"^explore\s+'([^']+)'$", s, re.I)
-    if m:
-        op_explore(m.group(1))
-        return
-
-    m = re.match(r"^backup\s+'([^']+)'\s+'([^']+)'$", s, re.I)
-    if m:
-        op_backup(m.group(1), m.group(2))
-        return
-
-        # --- Universal run command (supports optional 'in <path>' and both quote styles) ---
-    m = re.match(r'^run\s+(?:"([^"]+)"|\'([^\']+)\')\s*(?:in\s+(?:"([^"]+)"|\'([^\']+)\'))?$', s, re.I)
-    if m:
-        # Support both 'path' and "path"
-        target = Path(m.group(1) or m.group(2)).expanduser()
-        workdir = Path(m.group(3) or m.group(4)).expanduser() if (m.group(3) or m.group(4)) else target.parent
-        ext = target.suffix.lower()
-        try:
-            cwd = str(workdir)
-
-            # --- Run logic (non-blocking) ---
-            if ext == ".py":
-                subprocess.Popen(["python", str(target)], cwd=cwd, shell=True)
-            elif ext in (".bat", ".cmd"):
-                subprocess.Popen(["cmd.exe", "/c", str(target)], cwd=cwd, shell=True)
-            elif ext == ".vbs":
-                subprocess.Popen(["wscript", str(target)], cwd=cwd, shell=True)
-            elif ext == ".exe":
-                os.startfile(str(target))
-            else:
-                # Fallback — let Windows decide the default handler
-                subprocess.Popen(["cmd.exe", "/c", str(target)], cwd=cwd, shell=True)
-
-            p(f"🚀 Launched: {target} (cwd={cwd})")
-
-        except Exception as e:
-            p(f"[red]❌ Failed to run:[/red] {e}")
-        return
-
-
-
-
-
-
-    # ---------- Internet (supports quoted/unquoted URLs or paths) ----------
-    m = re.match(r"^downloadlist\s+(?:'([^']+)'|(\S+))\s+to\s+(?:'([^']+)'|(\S+))$", s, re.I)
-    if m:
-        src = m.group(1) or m.group(2)
-        dest = m.group(3) or m.group(4)
-        op_download_list(src, dest)
-        return
-
-    m = re.match(r"^download\s+(?:'([^']+)'|(\S+))\s+to\s+(?:'([^']+)'|(\S+))$", s, re.I)
-    if m:
-        src = m.group(1) or m.group(2)
-        dest = m.group(3) or m.group(4)
-        op_download(src, dest)
-        return
-
+    # ---------- Internet ----------
     m = re.match(r"^open\s+url\s+(?:'([^']+)'|(\S+))$", s, re.I)
     if m:
         url = m.group(1) or m.group(2)
         op_open_url(url)
         return
+
+    # ---------- Web search (default browser e.g. Brave) ----------
+    m = re.match(r"^search\s+web\s+(.+)$", s, re.I)
+    if m:
+        q = m.group(1).strip()
+        if q:
+            url = "https://www.google.com/search?q=" + urllib.parse.quote_plus(q)
+            webbrowser.open(url)
+            p(f"[cyan]🌐 Opened Google search for:[/cyan] {q}")
+        else:
+            p("Usage: search web <text>")
+        return
+
+    m = re.match(r"^youtube\s+(.+)$", s, re.I)
+    if m:
+        q = m.group(1).strip()
+        if q:
+            url = "https://www.youtube.com/results?search_query=" + urllib.parse.quote_plus(q)
+            webbrowser.open(url)
+            p(f"[cyan]🎬 Opened YouTube search for:[/cyan] {q}")
+        else:
+            p("Usage: youtube <text>")
+        return
+
+
+        
+        # ---------- Web search (opens your default browser e.g., Brave) ----------
+    m = re.match(r"^search\s+web\s+(.+)$", s, re.I)
+    if m:
+        q = m.group(1).strip()
+        if q:
+            url = "https://www.google.com/search?q=" + urllib.parse.quote_plus(q)
+            webbrowser.open(url)
+            p(f"[cyan]🌐 Opened Google search for:[/cyan] {q}")
+        else:
+            p("Usage: search web <text>")
+        return
+
+    m = re.match(r"^youtube\s+(.+)$", s, re.I)
+    if m:
+        q = m.group(1).strip()
+        if q:
+            url = "https://www.youtube.com/results?search_query=" + urllib.parse.quote_plus(q)
+            webbrowser.open(url)
+            p(f"[cyan]🎬 Opened YouTube search for:[/cyan] {q}")
+        else:
+            p("Usage: youtube <text>")
+        return
+
 
 
 
@@ -1718,7 +1959,9 @@ def show_help():
 "🌍 INTERNET — Download with 1 GB safety cap\n"
 "  download 'https://...' to 'C:/Downloads'\n"
 "  downloadlist 'C:/urls.txt' to 'C:/Downloads'\n"
-"  open url 'https://example.com'\n\n"
+"  open url 'https://example.com'\n"
+"  search web <query>          Open Google search in your default browser\n"
+"  youtube <query>             Search YouTube in your default browser\n\n"
 "────────────────────────────────────────────────────────\n\n"
 "🧰 MACROS (persistent) — Save and run command sequences\n"
 "  macro add <name> = <commands>\n"
@@ -1726,6 +1969,17 @@ def show_help():
 "  macro list\n"
 "  macro delete <name>    macro clear\n"
 "  Vars available: %DATE%, %NOW%, %HOME%\n\n"
+"────────────────────────────────────────────────────────\n\n"
+"⚡ ALIASES — Custom command shortcuts (lightweight macros)\n"
+"  alias add <name> <command>    Create a shortcut\n"
+"  alias list                    Show saved aliases\n"
+"  alias delete <name>           Remove a shortcut\n"
+"  alias clear                   Delete all aliases\n\n"
+"  Examples:\n"
+"    alias add g search web\n"
+"    alias add yt youtube\n"
+"    g python subprocess example\n"
+"    yt trackmania drift\n\n"
 "────────────────────────────────────────────────────────\n\n"
 "⛭ CONTROL — Toggles & utilities\n"
 "  batch on | batch off        Auto-confirm prompts (skip Y/N)\n"
@@ -1740,10 +1994,15 @@ def show_help():
 "  exit                       Close Computer Main Centre\n\n"
 "────────────────────────────────────────────────────────\n\n"
 "☕ JAVA — Manage system-wide Java environment\n"
-"  java list                   Show configured versions\n"
-"  java version                Show currently active version and path\n"
-"  java change <8|17|21>       Switch and persist system-wide\n"
-"  java reload                 Reload system Java (re-read registry after change)\n\n"
+"  java list                   Auto-detect and show all installed Java versions\n"
+"  java version                Show currently active Java version and JAVA_HOME\n"
+"  java change <version|name|path>  Switch to a specific JDK/JRE (supports full path)\n"
+"  java reload                 Reload JAVA_HOME and PATH from the Windows registry\n\n"
+"  Examples:\n"
+"    java change 17\n"
+"    java change jdk-21.0.8.9-hotspot\n"
+"    java change 'C:/Program Files/Java/jdk-17'\n"
+"    java reload\n"
 "────────────────────────────────────────────────────────\n\n"
 "🔎 LOCAL PATH INDEX (no server) — Instant search of your drives\n"
 "  /qfind <terms> [limit]      Multi-word AND search (default limit 20)\n"
@@ -1789,6 +2048,7 @@ def show_help():
         )
     else:
         print(content)
+
 
 
 
