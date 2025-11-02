@@ -1,60 +1,103 @@
-📘 COMPUTER MAIN CENTRE (CMC)
-=============================
+=====================================================
+Computer Main Centre (CMC)
+Local AI Command Console
+=====================================================
 
-A local command console for safe file automation, Git integration, and instant path search.
+Computer Main Centre (CMC) is a local AI-assisted command console for Windows designed for file automation, macros, Git management, Java control, and safe operation modes.
 
-──────────────────────────────
-🚀 QUICK START
-──────────────────────────────
+=====================================================
+Installation
+=====================================================
 
-1. Install **Python 3**  
-   → https://www.python.org/downloads/  
-   ✔ Check “Add Python to PATH” during setup
+1. Install Python 3.11 or newer from https://www.python.org/downloads/
 
-2. Open Command Prompt and install dependencies:
+2. Open CMD and install required packages:
+
    pip install rich requests pyautogui prompt_toolkit
 
-3. (Optional) Install **Git for Windows**  
-   → https://git-scm.com/download/win
+   (Optional: For old Windows CMD versions, also run `pip install pyreadline3`)
 
-4. Launch:
-   • Double-click **Start_CMC.vbs**
-   • Or run:  python Computer_Main_Centre.py
+3. Download or clone CMC, then start with:
 
+   cd C:\Users\<YourName>\Desktop\CMC
+   py Computer_Main_Centre.py
 
-──────────────────────────────
-💡 USAGE
-──────────────────────────────
+=====================================================
+Features
+=====================================================
 
-• Type `help` inside CMC to see all commands.  
-• Use `/qbuild` once to build a fast local index for `/qfind` and `/qcount`.  
-• Common examples:
-  - `backup 'C:/Users/user/Documents' 'D:/Backups'`
-  - `macro add publish = delete 'C:/Public/CMC.py'; copy 'C:/Main/CMC.py' to 'C:/Public'`
-  - `batch on; copy 'C:/file.txt' to 'D:/'; batch off`
+- Rich colored console interface
+- Full file management (create/read/write/move/copy/delete/zip/unzip/open/explore/backup)
+- Safe modes: Dry-Run and Batch
+- SSL toggle for safe downloads
+- Persistent macros with support for variables
+- Aliases for quick command shortcuts
+- GitHub integration (/gitsetup, /gitupdate, /gitpull, /gitlog, etc.)
+- Java version auto-detection and management
+- Quick Path Index for instant file search
+- Web search integration (`search web`, `youtube`)
+- Autocompletion using prompt_toolkit (press TAB)
 
-──────────────────────────────
-🔧 TROUBLESHOOTING
-──────────────────────────────
+=====================================================
+Main Commands
+=====================================================
 
-If you see:
-❌ Error: cannot DELETE from contentless fts5 table: paths_fts  
-→ Delete `paths.db` from the CMC folder and rerun `/qbuild`.
+NAVIGATION
+  pwd / cd / back / home
 
-──────────────────────────────
-☕ GIT FEATURES
-──────────────────────────────
+FILE OPS
+  create file 'name.txt' in 'C:/path' [with text='hello']
+  create folder 'Name' in 'C:/path'
+  read / write / copy / move / rename / delete
+  zip / unzip / backup / open / explore
 
-CMC can push or pull GitHub repositories directly:
-  /gitsetup "RepoName"
-  /gitupdate "message"
-  /gitpull
-  /gitstatus
-  /gitdoctor
+CONTROL
+  batch on/off
+  dry-run on/off
+  ssl on/off
+  status / log / undo / help / exit
 
-──────────────────────────────
-✅ DONE
-──────────────────────────────
+MACROS
+  macro add <name> = <commands>
+  macro run <name>
+  macro list / macro delete <name> / macro clear
 
-You’re ready!  
-Start with **Start_CMC.vbs**, type `help`, and explore your automation console.
+ALIASES
+  alias add <shortcut> <command>
+  alias list
+  alias delete <shortcut>
+
+INTERNET
+  download 'https://...' to 'C:/Downloads'
+  downloadlist 'C:/urls.txt' to 'C:/Downloads'
+  open url 'https://example.com'
+  search web <query>
+  youtube <query>
+
+JAVA
+  java list
+      → Auto-detects all installed JDK/JRE versions.
+  java change <path|version>
+      → Change Java version system-wide or per path.
+  java version
+      → Shows active version and path.
+  java reload
+      → Reload environment from registry.
+
+INDEXING
+  /qbuild [drives]
+      → Rebuild search index for all drives (auto-detects C, D, E, F).
+  /qcount
+      → Show indexed path count.
+  /qfind <query> [limit]
+      → Search indexed database.
+
+=====================================================
+Notes
+=====================================================
+
+- All commands are case-insensitive.
+- CMC uses a virtual CWD (its own working directory system).
+- Use quotes around paths with spaces.
+- Macros saved under: %USERPROFILE%\.ai_helper\macros.json
+- Aliases saved under: %USERPROFILE%\.ai_helper\aliases.json
