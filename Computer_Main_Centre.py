@@ -562,16 +562,25 @@ def handle_git_commands(s: str, low: str) -> bool:
 
 
 
+# ---------- Local Path Index (portable import) ----------
 try:
     import runpy
-    PATH_INDEX_LOCAL = r"C:\Users\Wiggo\Desktop\CentreAPI\path_index_local.py"
-    _mod_pathindex = runpy.run_path(PATH_INDEX_LOCAL)
-    _qpaths = _mod_pathindex.get("query_paths")
-    _qcount = _mod_pathindex.get("count_paths")
-    _qbuild = _mod_pathindex.get("rebuild_index")
+    from pathlib import Path
+
+    PATH_INDEX_LOCAL = Path(__file__).parent / "path_index_local.py"
+    if not PATH_INDEX_LOCAL.exists():
+        raise FileNotFoundError(f"Missing: {PATH_INDEX_LOCAL}")
+
+    _mod_pathindex = runpy.run_path(str(PATH_INDEX_LOCAL))
+    _qpaths  = _mod_pathindex.get("query_paths")
+    _qcount  = _mod_pathindex.get("count_paths")
+    _qbuild  = _mod_pathindex.get("rebuild_index")
     _DB_DEFAULT = _mod_pathindex.get("DEFAULT_DB")
-except Exception as _e:
+except Exception as e:
+    print(f"[WARN] Path-index module not loaded: {e}")
     _qpaths = _qcount = _qbuild = _DB_DEFAULT = None
+
+
 
 UNDO = []  # stack of reversible actions
 
@@ -2155,7 +2164,7 @@ def show_help():
 "🔎 LOCAL PATH INDEX (no server) — Instant search of your drives\n"
 "  /qfind <terms> [limit]      Multi-word AND search (default limit 20)\n"
 "  /qcount                     Show total indexed paths\n"
-"  /qbuild [targets...]        Rebuild/refresh index (e.g. C:/Users/Wiggo C E F)\n\n"
+"  /qbuild [targets...]        Rebuild/refresh index (e.g. %USERPROFILE% C E F)\n\n"
 "────────────────────────────────────────────────────────\n\n"
 "🌐 GIT / GITHUB — Upload & sync projects\n"
 "  /gitsetup \"RepoName\"          Create & push a brand-new GitHub repository\n"
@@ -2175,7 +2184,7 @@ def show_help():
 "  /qfind atlauncher servers\n"
 "  java change 17\n"
 "  java reload\n"
-"  backup 'C:/Users/Wiggo/Downloads' to 'C:/Backups'\n\n"
+"  backup '%USERPROFILE%/Downloads' to 'C:/Backups'\n\n"
 "Tips\n"
 "  • Chain with semicolons: batch on; create file 'a.txt' in '.' with text='hi'; zip '.'; batch off\n"
 "  • Paths can be relative to the current prompt directory."
