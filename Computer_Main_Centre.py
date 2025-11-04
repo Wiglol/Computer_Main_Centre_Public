@@ -1039,6 +1039,49 @@ def op_backup(src, dest):
         log_action(f"BACKUP_ZIP {s} -> {out}")
         p(f"[green]✅ Backup created:[/green] {out}")
         
+        
+        # ---------- System Info ----------
+def op_sysinfo(save_path=None):
+    import platform, psutil, subprocess
+    info = {}
+    try:
+        info["OS"] = f"{platform.system()} {platform.release()} ({platform.version()})"
+        info["CPU"] = platform.processor() or "Unknown"
+        info["Cores"] = psutil.cpu_count(logical=True)
+        info["RAM"] = f"{round(psutil.virtual_memory().total / (1024**3), 1)} GB"
+        # GPU via wmic
+        try:
+            gpu_out = subprocess.check_output(
+                "wmic path win32_VideoController get name", shell=True, text=True
+            )
+            gpus = [g.strip() for g in gpu_out.splitlines() if g.strip() and "Name" not in g]
+            info["GPU"] = ", ".join(gpus) if gpus else "Unknown"
+        except Exception:
+            info["GPU"] = "Unknown"
+        # PSU info (limited support)
+        try:
+            psu_out = subprocess.check_output(
+                'powershell "Get-WmiObject Win32_PowerSupply | Select-Object Name,Manufacturer"',
+                shell=True, text=True
+            )
+            psu_lines = [l.strip() for l in psu_out.splitlines() if l.strip()]
+            info["PSU"] = "; ".join(psu_lines[2:]) if len(psu_lines) > 2 else "Unknown / No telemetry"
+        except Exception:
+            info["PSU"] = "Unknown / No telemetry"
+        # Uptime
+        info["Uptime"] = f"{round(time.time() - psutil.boot_time())/3600:.1f} h"
+    except Exception as e:
+        p(f"[red]❌ sysinfo failed:[/red] {e}")
+        return
+
+    text = "\n".join(f"{k}: {v}" for k, v in info.items())
+    if save_path:
+        Path(save_path).write_text(text, encoding="utf-8")
+        p(f"[green]Saved system info →[/green] {save_path}")
+    else:
+        p(Panel(text, title="🧠 System Info", border_style="cyan") if RICH else text)
+
+        
 # ---------- Info / Find / Search ----------
 def op_info(path):
     pth = resolve(path)
@@ -1250,6 +1293,61 @@ def op_download_list(file_with_urls, dest_folder):
     urls = [line.strip() for line in fp.read_text(encoding="utf-8", errors="ignore").splitlines() if line.strip()]
     for u in urls:
         op_download(u, dest_folder)
+        
+        
+# ---------- Timer / Reminder ----------
+def op_timer(delay, action=None):
+    """
+    Start a countdown timer (seconds). When done, prints a message or runs a command.
+    Example:
+      timer 10 "Done!"
+      timer 60 run macro run publish_public
+    """
+    import threading
+
+    def _trigger():
+        if not action:
+            p(f"[green bold]✅ Timer finished ({delay}s).[/green bold]")
+            return
+
+        text = action.strip()
+        low = text.lower()
+
+        if low.startswith("run ") or low.startswith("macro "):
+            # Safely run macro/command: force Batch Mode ON so Y/N prompts don’t hang
+            p(f"[cyan]⏰ Timer triggered:[/cyan] {text}")
+            prev_batch = STATE.get("batch", False)
+            STATE["batch"] = True
+            try:
+                handle_command(text)
+            finally:
+                STATE["batch"] = prev_batch
+        else:
+            # Plain text message
+            p(Panel(f"⏰ {action}", title="Timer Finished", border_style="green"))
+
+    try:
+        delay = int(delay)
+        if delay <= 0:
+            p("[red]Timer delay must be positive.[/red]")
+            return
+    except Exception:
+        p("[red]Invalid timer delay.[/red]")
+        return
+
+    try:
+        t = threading.Timer(delay, _trigger)
+        t.daemon = True
+        t.start()
+        p(f"[cyan]⏳ Timer set for {delay} s.[/cyan]")
+    except Exception as e:
+        p(f"[red]❌ Timer error:[/red] {e}")
+
+
+
+
+
+
 
 # ---------- Log / Undo ----------
 def op_log():
@@ -1447,6 +1545,7 @@ def suggest_commands(s: str):
         print("Suggestions:", ", ".join(cands[:10]))
 
 def handle_command(s: str):
+
     # hard-reset any broken global Path
     import pathlib, builtins
     builtins.Path = pathlib.Path
@@ -1463,6 +1562,7 @@ def handle_command(s: str):
     # Skip comment / empty lines
     if not s.strip() or s.strip().startswith("#"):
         return
+
 
 
 
@@ -1506,6 +1606,15 @@ def handle_command(s: str):
 
     # Normalize once
     low = s.lower()
+    
+
+    # ---------- Timer command ----------
+    m = re.match(r"^timer\s+(\d+)(?:\s+(.+))?$", s, re.I)
+    if m:
+        op_timer(m.group(1), m.group(2))
+        return
+
+
 
     # ---------- Utility automation commands ----------
     m = re.match(r"^sleep\s+(\d+)$", s, re.I)
@@ -1759,6 +1868,13 @@ def handle_command(s: str):
         except Exception as e:
             p(f"[yellow]Setx warning:[/yellow] {e}")
         return
+        
+            # ---------- System Info ----------
+    m = re.match(r"^sysinfo(?:\s+save\s+'(.+?)')?$", s, re.I)
+    if m:
+        op_sysinfo(m.group(1))
+        return
+
         
             # ---------- File & Info operations ----------
     # list ['path']
@@ -2074,6 +2190,24 @@ def handle_command(s: str):
 
 
 
+    # ---------- CMD passthrough ----------
+    # Opens a real Windows Command Prompt session inside the same window.
+    # Type 'exit' to return back to CMC after using normal CMD commands.
+    if low == "cmd":
+        if STATE.get("dry_run"):
+            p("[yellow]DRY-RUN:[/yellow] CMD session skipped.")
+            return
+        if not STATE.get("batch"):
+            if not confirm("Open a full CMD session? You can type 'exit' to return to CMC."):
+                p("[yellow]Canceled.[/yellow]")
+                return
+        try:
+            p("[cyan]Entering Windows CMD mode — type 'exit' to return to CMC.[/cyan]")
+            os.system("cmd")
+            p("[cyan]Returned from CMD mode.[/cyan]")
+        except Exception as e:
+            p(f"[red]❌ CMD session failed:[/red] {e}")
+        return
 
 
     # Unknown / partial
@@ -2211,14 +2345,25 @@ def show_help():
 
 
 
-
 # ---------- Main loop ----------
 def split_commands(line: str):
+    """
+    Splits chained commands separated by semicolons (;)
+    but keeps whole lines for 'macro add' and 'timer' commands.
+    """
     parts = []
     buf = []
     q = None
     in_macro_add = False
     i = 0
+
+    line = line.rstrip()
+    if not line:
+        return []
+
+    # if it's a timer command, never split it
+    if line.lower().startswith("timer "):
+        return [line]
 
     while i < len(line):
         ch = line[i]
@@ -2230,11 +2375,8 @@ def split_commands(line: str):
             buf.append(ch)
         else:
             # not in quotes
-            # detect "macro add" at the beginning of the line buffer
             if not in_macro_add:
-                # look at the current buffer (trim leading spaces) in lowercase
                 temp = "".join(buf).lstrip().lower()
-                # once a line starts with "macro add", we stop splitting on ';'
                 if temp.startswith("macro add"):
                     in_macro_add = True
 
@@ -2242,17 +2384,24 @@ def split_commands(line: str):
                 q = ch
                 buf.append(ch)
             elif ch == ";" and not in_macro_add:
-                # split commands on ';' unless we're in a macro add line
-                parts.append("".join(buf).strip())
+                part = "".join(buf).strip()
+                if part:
+                    parts.append(part)
                 buf = []
             else:
                 buf.append(ch)
 
         i += 1
 
-    if buf:
-        parts.append("".join(buf).strip())
+    # append any remaining buffer once
+    final = "".join(buf).strip()
+    if final:
+        parts.append(final)
+
+    # DEBUG optional
+    # print("[DEBUG split_commands]", parts)
     return parts
+
 
 
 import shlex
@@ -2362,20 +2511,53 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.styles import Style
 
+# ---------- Dynamic Autocomplete Builder ----------
 def build_completer():
-    cmds = [
-        "pwd","cd","back","home","list","info","find","findext","recent","biggest","search",
-        "create file","create folder","write","read","move","copy","rename","delete","zip","unzip",
-        "open","explore","backup","run","download","downloadlist","open url","batch on","batch off",
-        "dry-run on","dry-run off","ssl on","ssl off","status","log","undo",
-        "macro add","macro run","macro list","macro delete","macro clear",
-        "/gitsetup","/gitlink","/gitupdate","/gitpull","/gitstatus","/gitlog","/gitbranch",
-        "/gitignore add","/gitclean","/gitdoctor","/gitfix","/gitlfs setup",
-        "/qfind","/qcount","/qbuild","java list","java version","java change","java reload",
-        "sleep","sendkeys","help","exit"
+    """
+    Dynamically extract all command names from handle_command()
+    regex routes + macros + aliases for live autocomplete.
+    """
+    import inspect, re
+
+    cmds = []
+    try:
+        # --- 1. Scan handle_command source for regex routes ---
+        src = inspect.getsource(handle_command)
+        found = re.findall(r'\^([A-Za-z0-9/_\-]+)', src)
+        cmds = sorted(set(found))
+    except Exception:
+        pass
+
+    # --- 2. Add static helper words & toggles ---
+    base_cmds = [
+        "help", "exit", "status",
+        "batch on", "batch off",
+        "dry-run on", "dry-run off",
+        "ssl on", "ssl off",
+        "sleep", "sendkeys"
     ]
-    cmds += list(MACROS.keys())
+    cmds += base_cmds
+
+    # --- 3. Include all macros and aliases dynamically ---
+    try:
+        # Always reload latest macros from disk to include old ones
+        macro_data = macros_load()
+        cmds += list(macro_data.keys())
+    except Exception:
+        pass
+
+    try:
+        cmds += list(ALIASES.keys())
+    except Exception:
+        pass
+
+    # --- 4. Clean duplicates & sort ---
+    cmds = sorted(set(cmds), key=str.lower)
+
+    # --- 5. Return the prompt_toolkit completer ---
     return WordCompleter(cmds, ignore_case=True)
+
+
 
 # create a prompt session
 session = PromptSession()
@@ -2402,7 +2584,13 @@ style = Style.from_dict({
 def main():
     global CWD
     show_header()
+
+    # Ensure macros are always loaded fresh from disk
+    global MACROS
+    MACROS = macros_load()
+
     completer = build_completer()
+
     while True:
         try:
             line = session.prompt(
@@ -2414,7 +2602,13 @@ def main():
         except (EOFError, KeyboardInterrupt):
             print()
             break
+
         for part in split_commands(line):
+            # Prevent timer from splitting its message argument
+            if part.lower().startswith("timer "):
+                handle_command(line)   # run the whole thing once
+                break
+
             try:
                 handle_command(part)
             except SystemExit:
