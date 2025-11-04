@@ -1555,6 +1555,8 @@ def handle_command(s: str):
     import pathlib
     globals()["Path"] = pathlib.Path
 
+    import subprocess  # ✅ keep 4-space indentation, same as others
+
     s = s.strip()
     if not s:
         return
@@ -1562,6 +1564,27 @@ def handle_command(s: str):
     # Skip comment / empty lines
     if not s.strip() or s.strip().startswith("#"):
         return
+
+        
+        
+            # ---------- CMD passthrough (inline) ----------
+    m = re.match(r"^cmd\s+(.+)$", s, re.I)
+    if m:
+        cmd_line = m.group(1)
+        if STATE.get("dry_run"):
+            p(f"[yellow]DRY-RUN:[/yellow] would run CMD → {cmd_line}")
+            return
+        try:
+            import subprocess
+            result = subprocess.run(cmd_line, shell=True, text=True, capture_output=True)
+            if result.stdout:
+                p(result.stdout.strip())
+            if result.stderr:
+                p(f"[red]{result.stderr.strip()}[/red]")
+        except Exception as e:
+            p(f"[red]❌ CMD command failed:[/red] {e}")
+        return
+
 
 
 
@@ -2272,6 +2295,25 @@ def show_help():
 "    g python subprocess example\n"
 "    yt trackmania drift\n\n"
 "────────────────────────────────────────────────────────\n\n"
+"⏲️ TIMER & REMINDERS — Run commands or messages after delay\n"
+"  timer <seconds> [action]\n"
+"      Start a countdown timer (in seconds).\n"
+"      When time expires:\n"
+"        • If [action] is text, it prints a reminder.\n"
+"        • If [action] starts with 'run' or 'macro', that command is executed automatically.\n\n"
+"  Examples:\n"
+"      timer 10 \"Take a break!\"\n"
+"      timer 5 run macro run publish_public\n"
+"      timer 60 macro run backup_journey\n\n"
+"────────────────────────────────────────────────────────\n\n"
+"🪟 CMD PASSTHROUGH — Use real Windows commands inside CMC\n"
+"  cmd                         Open full Windows Command Prompt (type 'exit' to return)\n"
+"  cmd <command>               Run a Windows CMD command directly\n\n"
+"  Examples:\n"
+"      cmd dir\n"
+"      cmd ipconfig /all\n"
+"      cmd sfc /scannow\n\n"
+"────────────────────────────────────────────────────────\n\n"
 "⛭ CONTROL — Toggles & utilities\n"
 "  batch on | batch off        Auto-confirm prompts (skip Y/N)\n"
 "  dry-run on | dry-run off    Preview actions without executing\n"
@@ -2323,6 +2365,7 @@ def show_help():
 "  • Chain with semicolons: batch on; create file 'a.txt' in '.' with text='hi'; zip '.'; batch off\n"
 "  • Paths can be relative to the current prompt directory."
     ).strip()
+
 
     if RICH:
         from rich.measure import Measurement
