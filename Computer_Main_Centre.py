@@ -270,21 +270,34 @@ STATE["java_version"] = detect_java_version()
 
 # ---------- GitHub Integration (Wizard) ----------
 import base64
+import shutil
 
-GIT_CFG = CFG_DIR / "github.json"  # persists your PAT locally
+def _git_run(cmd, cwd=None):
+    """
+    Unified Git runner with safety checks.
+    Accepts either a list of args (["status"]) or a string ("git status").
+    """
+    if not shutil.which("git"):
+        p("[red]❌ Git is not installed or not found in PATH.[/red]")
+        return "(no git)"
 
-def _git_run(cmd: str, cwd: str = None):
-    """Run git shell command and return combined output or raise on error."""
     try:
-        r = subprocess.run(cmd, cwd=cwd, shell=True, text=True,
-                           capture_output=True, check=True)
-        out = (r.stdout or "").strip()
-        err = (r.stderr or "").strip()
+        if isinstance(cmd, (list, tuple)):
+            full_cmd = ["git"] + list(cmd)
+            result = subprocess.run(full_cmd, cwd=cwd, text=True, capture_output=True, check=True)
+        else:
+            result = subprocess.run(cmd, cwd=cwd, shell=True, text=True, capture_output=True, check=True)
+
+        out = (result.stdout or "").strip()
+        err = (result.stderr or "").strip()
         return (out + ("\n" + err if err else "")).strip() or "(done)"
+
     except subprocess.CalledProcessError as e:
         out = (e.stdout or "").strip()
         err = (e.stderr or "").strip()
-        raise RuntimeError((out + ("\n" + err if err else "")).strip())
+        p(f"[red]❌ Git command failed:[/red]\n{out}\n{err}")
+        return "(git error)"
+
 
 def _git_token():
     """Read/write GitHub Personal Access Token (classic) in ~/.ai_helper/github.json."""
@@ -1396,34 +1409,13 @@ def op_download_list(file_with_urls, dest_folder):
 # ---------- Timer / Reminder ----------
 def op_timer(delay, action=None):
     """
-    Start a countdown timer (seconds). When done, prints a message or runs a command.
-    Example:
-      timer 10 "Done!"
-      timer 60 run macro run publish_public
+    timer <seconds> [action]
+      - If [action] starts with 'run' or 'macro', it executes that command.
+      - Otherwise it prints the text as a reminder.
     """
-    import threading
+    import threading, sys
 
-    def _trigger():
-        if not action:
-            p(f"[green bold]✅ Timer finished ({delay}s).[/green bold]")
-            return
-
-        text = action.strip()
-        low = text.lower()
-
-        if low.startswith("run ") or low.startswith("macro "):
-            # Safely run macro/command: force Batch Mode ON so Y/N prompts don’t hang
-            p(f"[cyan]⏰ Timer triggered:[/cyan] {text}")
-            prev_batch = STATE.get("batch", False)
-            STATE["batch"] = True
-            try:
-                handle_command(text)
-            finally:
-                STATE["batch"] = prev_batch
-        else:
-            # Plain text message
-            p(Panel(f"⏰ {action}", title="Timer Finished", border_style="green"))
-
+    # ---- parse delay safely ----
     try:
         delay = int(delay)
         if delay <= 0:
@@ -1433,19 +1425,62 @@ def op_timer(delay, action=None):
         p("[red]Invalid timer delay.[/red]")
         return
 
+    def thread_print(msg: str):
+        """Thread-safe print that keeps cursor and color consistent."""
+        sys.stdout.write(f"\n{msg}\n")
+        # Carriage return resets line start, print bright cyan prompt
+        sys.stdout.write(f"\r\033[1;96mCMC>{CWD}> \033[0m")
+        sys.stdout.flush()
+
+    def _trigger():
+        try:
+            if not action:
+                thread_print(f"✅ Timer finished ({delay}s).")
+                return
+
+            text = action.strip()
+            low = text.lower()
+
+            if low.startswith("run ") or low.startswith("macro "):
+                thread_print(f"⏰ Timer triggered: {text}")
+                prev_batch = STATE.get("batch", False)
+                STATE["batch"] = True
+                try:
+                    handle_command(text)
+                except Exception as e:
+                    thread_print(f"❌ Timer action failed: {e}")
+                finally:
+                    STATE["batch"] = prev_batch
+            else:
+                thread_print(f"⏰ {action}")
+
+        except Exception as e:
+            thread_print(f"❌ Timer thread error: {e}")
+
+        finally:
+            try:
+                from prompt_toolkit.application import get_app
+                app = get_app()
+                app.invalidate()
+                # ensure color reset after redraw
+                sys.stdout.write("\033[0m")
+                sys.stdout.flush()
+            except Exception:
+                pass
+
     try:
         t = threading.Timer(delay, _trigger)
         t.daemon = True
         t.start()
         p(f"[cyan]⏳ Timer set for {delay} s.[/cyan]")
+        sys.stdout.flush()
     except Exception as e:
         p(f"[red]❌ Timer error:[/red] {e}")
 
 
 
-
-
-
+ 
+ 
 
 # ---------- Log / Undo ----------
 def op_log():
