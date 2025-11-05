@@ -1,8 +1,20 @@
 import os, sys, json, time, sqlite3, argparse
 from pathlib import Path
+import getpass
 
-# Default DB lives outside temp folders so it persists nicely
-DEFAULT_DB = Path(r"C:\Users\Wiggo\Desktop\CentreIndex\paths.db")
+# ---------- Dynamic default DB path ----------
+def get_default_db():
+    try:
+        user = getpass.getuser()  # works everywhere (no hardcoded name)
+        base = Path.home() / "CentreIndex"
+        base.mkdir(parents=True, exist_ok=True)
+        return base / "paths.db"
+    except Exception:
+        # fallback if home() fails
+        return Path(os.getcwd()) / "paths.db"
+
+DEFAULT_DB = get_default_db()
+# ---------------------------------------------
 
 def norm(p: str) -> str:
     return str(p).replace("\\", "/").strip()
@@ -179,11 +191,6 @@ def main():
         print(json.dumps([{"path": p, "score": s} for (p, s) in results], ensure_ascii=False))
         return
 
-    print("Usage:")
-    print("  python path_index_local.py --build C:/Users/Wiggo,C,E,F")
-    print("  python path_index_local.py --count")
-    print("  python path_index_local.py --query atlauncher --limit 25")
-
 if __name__ == "__main__":
     try:
         main()
@@ -192,4 +199,29 @@ if __name__ == "__main__":
         import traceback
         traceback.print_exc()
         input("\nPress Enter to exit...")
+
+# ---------- CMC compatibility wrappers ----------
+from pathlib import Path as _P
+
+def quick_build(targets: str = None):
+    """Bridge for /qbuild — uses the SQLite rebuild_index logic."""
+    if targets:
+        items = [x.strip() for x in targets.split() if x.strip()]
+    else:
+        items = ["C", "D", "E", "F"]
+    rebuild_index(DEFAULT_DB, items)
+
+def quick_count():
+    """Bridge for /qcount."""
+    return count_paths(DEFAULT_DB)
+
+def quick_find(terms: str, limit: int = 20):
+    """Bridge for /qfind — returns list of plain paths."""
+    out = query_paths(DEFAULT_DB, terms, limit)
+    return [p for (p, _) in out]
+
+
+
+
+
 
