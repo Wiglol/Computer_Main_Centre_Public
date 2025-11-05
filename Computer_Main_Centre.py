@@ -1,38 +1,66 @@
-
 #!/usr/bin/env python3
-# ---------- CMC hard-start globals (do not move) ----------
-import re, sys, pathlib
-# Make pathlib.Path available globally from the start
+# ---------- CMC hard-start globals ----------
+import sys, re, pathlib, subprocess, importlib, platform
 Path = pathlib.Path
 globals()["Path"] = pathlib.Path
 
-# Minimal global print wrapper; later Rich code can overwrite it safely
-if "p" not in globals():
-    def p(x):
-        try:
-            # If a Rich console exists later, it will overwrite this anyway
-            console = globals().get("console", None)
-            if console:
-                console.print(x)
-                return
-        except Exception:
-            pass
-        try:
-            print(re.sub(r"\[/?[a-z]+\]", "", str(x)))
-        except Exception:
-            print(str(x))
-# ---------- end hard-start globals ----------
+# Minimal global print wrapper; Rich can override later
+def p(x):
+    try:
+        console = globals().get("console")
+        if console:
+            console.print(x)
+            return
+    except Exception:
+        pass
+    try:
+        print(re.sub(r"\[/?[a-z]+\]", "", str(x)))
+    except Exception:
+        print(str(x))
 
-# ==============================================
-#  Computer Main Centre  — Local AI Command Console
-#  - Batch mode, Dry-Run, SSL toggle
-#  - Rich UI if available
-#  - Navigation + search (with progress)
-#  - File ops (create/read/write/rename/copy/move/delete/zip/unzip/open/explore/run/backup)
-#  - Internet download (1 GB cap, SSL on/off, progress)
-#  - Log + basic undo (move/rename)
-#  - Macros (add / run / list / delete / clear) persisted to %USERPROFILE%\.ai_helper\macros.json
-# ==============================================
+# ---------- Dependency auto-check ----------
+MIN_PY = (3, 10)
+REQUIRED = ["rich", "requests", "pyautogui", "prompt_toolkit", "psutil"]
+
+def safe_run(cmd):
+    try:
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    except Exception:
+        pass
+
+def check_python_version():
+    if sys.version_info < MIN_PY:
+        p(f"⚠️  Python {MIN_PY[0]}.{MIN_PY[1]}+ recommended (current {platform.python_version()})")
+
+def upgrade_pip():
+    try:
+        import pip
+        major_minor = tuple(map(int, pip.__version__.split(".")[:2]))
+        if major_minor < (23, 0):
+            p("⬆️  Upgrading pip...")
+            safe_run([sys.executable, "-m", "pip", "install", "--upgrade", "pip"])
+    except Exception:
+        p("⚙️  Repairing pip...")
+        safe_run([sys.executable, "-m", "ensurepip", "--upgrade"])
+        safe_run([sys.executable, "-m", "pip", "install", "--upgrade", "pip"])
+
+def ensure_packages():
+    installed_any = False
+    for pkg in REQUIRED:
+        try:
+            importlib.import_module(pkg)
+        except ModuleNotFoundError:
+            installed_any = True
+            p(f"📦 Installing missing package: {pkg}")
+            safe_run([sys.executable, "-m", "pip", "install", pkg, "--upgrade"])
+    if installed_any:
+        p("✅ All dependencies installed.\n")
+
+check_python_version()
+upgrade_pip()
+ensure_packages()
+# ---------- End of bootstrap ----------
+
 
 # ==========================================================
 #  Computer Main Centre  — Local AI Command Console
@@ -100,50 +128,6 @@ import importlib, platform
 MIN_PY = (3, 10)
 REQUIRED = ["rich", "requests", "pyautogui", "prompt_toolkit", "psutil"]
 ...
-
-
-def safe_run(cmd):
-    """Run a system command quietly, returns exit code."""
-    try:
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-    except Exception:
-        pass
-
-def check_python_version():
-    if sys.version_info < MIN_PY:
-        print(f"⚠️  Warning: Python {MIN_PY[0]}.{MIN_PY[1]}+ is recommended. "
-              f"You’re using {platform.python_version()}. Some features may not work.\n")
-
-def upgrade_pip():
-    try:
-        import pip
-        pip_version = tuple(map(int, pip.__version__.split(".")[:2]))
-        if pip_version < (23, 0):
-            print("⬆️  Upgrading pip...\n")
-            safe_run([sys.executable, "-m", "pip", "install", "--upgrade", "pip"])
-    except Exception:
-        # if pip itself is missing or broken
-        print("⚠️  Repairing pip...\n")
-        safe_run([sys.executable, "-m", "ensurepip", "--upgrade"])
-        safe_run([sys.executable, "-m", "pip", "install", "--upgrade", "pip"])
-
-def ensure_packages():
-    installed_any = False
-    for pkg in REQUIRED:
-        try:
-            importlib.import_module(pkg)
-        except ModuleNotFoundError:
-            installed_any = True
-            print(f"📦 Installing missing package: {pkg}")
-            safe_run([sys.executable, "-m", "pip", "install", pkg, "--upgrade"])
-    if installed_any:
-        print("✅ All dependencies installed.\n")
-
-# --- Run checks ---
-check_python_version()
-upgrade_pip()
-ensure_packages()
-# ==========================================================
 
 
 # ---------- Global state ----------
