@@ -69,6 +69,7 @@ ensure_packages()
 import os, sys, re, glob, fnmatch, shutil, zipfile, subprocess, datetime, time, json, threading
 from pathlib import Path
 from urllib.parse import urlparse
+import webbrowser, urllib.parse
 import pathlib
 Path = pathlib.Path
 
