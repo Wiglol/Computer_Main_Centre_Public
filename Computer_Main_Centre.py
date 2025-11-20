@@ -69,7 +69,9 @@ ensure_packages()
 import os, sys, re, glob, fnmatch, shutil, zipfile, subprocess, datetime, time, json, threading
 from pathlib import Path
 from urllib.parse import urlparse
+from CMC_Web_Create import op_web_create
 import webbrowser, urllib.parse
+import json
 import pathlib
 Path = pathlib.Path
 
@@ -728,7 +730,10 @@ def confirm(msg: str) -> bool:
         return False
     if RICH:
         console.print(Panel(msg, title="Confirm", border_style="cyan"))
-        return Confirm.ask("Proceed?")
+        from rich.prompt import Prompt
+        choice = Prompt.ask("Proceed? [y/n]", choices=["y","n"], default="y")
+        return choice == "y"
+
     else:
         ans = input(f"{msg}\nProceed? (y/n): ").strip().lower()
         return ans.startswith("y")
@@ -1266,6 +1271,1371 @@ def op_run(path):
                 log_action(f"RUN {fp}")
             except Exception as e:
                 p(f"[red]❌ {e}[/red]" if RICH else f"Error: {e}")
+                
+                
+# ---------- Project Setup Wizard (Enhanced Web + fullstack support) ----------
+def op_project_setup():
+    """
+    Enhanced Project Setup Wizard:
+      - Detects many project types: Python, Node, Minecraft, Unity, Java, Web (static),
+        React, Vue, Svelte, Next, Express, Flask, Django, Fullstack (client/server).
+      - Builds a recommended action list.
+      - Asks Apply All? (Y/n) — if no, prompts for each action.
+      - Supports dry-run and batch modes.
+      - Runs actions safely and prints a BEFORE -> AFTER summary.
+    """
+    global CWD
+    base = CWD
+
+    # helper: safe read file contents (small)
+    def _read_small(fp: Path):
+        try:
+            return fp.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            return ""
+
+    # Detect web frameworks & other project types
+    def _detect_web_and_backends(base: Path, files, dirs):
+        info = {
+            "type": None,
+            "is_static": False,
+            "is_react": False,
+            "is_vue": False,
+            "is_svelte": False,
+            "is_next": False,
+            "is_express": False,
+            "is_flask": False,
+            "is_django": False,
+            "is_fullstack": False,
+            "client_dir": None,
+            "server_dir": None,
+            "has_package_json": False,
+            "package_json": None,
+            "has_node_modules": False,
+            "index_html": False
+        }
+
+        file_names = [f.name for f in files]
+        dir_names = [d.name for d in dirs]
+
+        # index.html static detection
+        if any(fn.lower() in ("index.html", "index.htm") for fn in file_names):
+            info["is_static"] = True
+            info["index_html"] = True
+            info["type"] = "Web Project (Static)"
+
+        # package.json based detection (frontend or node backend)
+        if "package.json" in file_names:
+            info["has_package_json"] = True
+            info["package_json"] = json.loads(_read_small(base / "package.json") or "{}")
+            deps = {}
+            deps.update(info["package_json"].get("dependencies", {}))
+            deps.update(info["package_json"].get("devDependencies", {}))
+            lower_deps = {k.lower(): v for k, v in deps.items()}
+
+            # basic frontend framework detectors
+            if "react" in lower_deps or "react-dom" in lower_deps or "next" in lower_deps:
+                if "next" in lower_deps:
+                    info["is_next"] = True
+                    info["type"] = "Next.js Project"
+                else:
+                    info["is_react"] = True
+                    info["type"] = "React Project"
+            if "vue" in lower_deps or "vite" in lower_deps and "vue" in _read_small(base / "package.json"):
+                info["is_vue"] = True
+                info["type"] = "Vue Project"
+            if "svelte" in lower_deps or ".svelte" in "".join(file_names).lower():
+                info["is_svelte"] = True
+                info["type"] = "Svelte Project"
+
+            # Express backend
+            if "express" in lower_deps or any(fn.lower() in ("server.js","app.js","index.js") for fn in file_names):
+                info["is_express"] = True
+                if not info["type"]:
+                    info["type"] = "Express (Node.js) Project"
+
+            if "node_modules" in dir_names:
+                info["has_node_modules"] = True
+
+        # server detection by files (python)
+        # Flask / Django detectors
+        if any(fn.lower() == "manage.py" for fn in file_names):
+            info["is_django"] = True
+            info["type"] = "Django Project"
+        else:
+            # scan python files for flask / fastapi usage
+            for fn in file_names:
+                if fn.lower().endswith(".py"):
+                    s = _read_small(base / fn)
+                    if "from flask" in s or "import flask" in s:
+                        info["is_flask"] = True
+                        if not info["type"]:
+                            info["type"] = "Flask Project"
+                    if "from fastapi" in s or "import fastapi" in s:
+                        # treat as backend (FastAPI handled like Flask for setup)
+                        if not info["type"]:
+                            info["type"] = "FastAPI Project"
+
+        # fullstack heuristics: client/ server folders
+        if "client" in dir_names and "server" in dir_names:
+            info["is_fullstack"] = True
+            info["client_dir"] = str(base / "client")
+            info["server_dir"] = str(base / "server")
+            info["type"] = "Fullstack Project (client + server)"
+
+        # If none detected, leave None -> fallback to Generic
+        return info
+
+    # Reuse existing detection helper if available, else gather files/dirs
+    try:
+        files = [f for f in base.iterdir() if f.is_file()]
+        dirs = [d for d in base.iterdir() if d.is_dir()]
+    except Exception as e:
+        p(f"[red]❌ Cannot access folder for setup:[/red] {e}")
+        return
+
+    before = _detect_project_for_setup(base)  # reuse the earlier helper if present
+    webinfo = _detect_web_and_backends(base, files, dirs)
+    project_type = webinfo["type"] or before.get("project_type", "Unknown")
+
+    # Build actions list (ordered and descriptive)
+    actions = []
+
+    # --- Web / Frontend actions ---
+    if webinfo["is_static"]:
+        actions.append({"id": "web_gitignore", "label": "Create basic web .gitignore"})
+        actions.append({"id": "web_readme", "label": "Create README.md for website"})
+        actions.append({"id": "web_assets", "label": "Create assets/ folder and sample files"})
+        actions.append({"id": "web_preview", "label": "Create simple local preview script (python http.server)"})
+
+    if webinfo["is_react"] or webinfo["is_vue"] or webinfo["is_svelte"] or webinfo["is_next"]:
+        actions.append({"id": "web_gitignore", "label": "Create framework .gitignore"})
+        if not webinfo.get("has_node_modules"):
+            actions.append({"id": "node_npm_install", "label": "Run 'npm install' to restore dependencies"})
+        actions.append({"id": "web_readme", "label": "Create README.md for project"})
+        if webinfo["is_next"]:
+            actions.append({"id": "web_next_build", "label": "Run 'npm run build' (Next.js build) [optional]"})
+        else:
+            actions.append({"id": "web_dev_hint", "label": "Show how to run the dev server (npm run dev/start)"})
+
+    # --- Node backend (Express) ---
+    if webinfo["is_express"]:
+        if not webinfo.get("has_node_modules"):
+            actions.append({"id": "node_npm_install", "label": "Run 'npm install' to restore dependencies"})
+        actions.append({"id": "node_start_script", "label": "Create a start script for Node backend (start_server.bat)"})
+        actions.append({"id": "web_gitignore", "label": "Create .gitignore (Node) if missing"})
+
+    # --- Python backend ---
+    if before.get("is_python") and (webinfo.get("is_flask") or before.get("is_python")):
+        # add python venv if missing (reuse earlier logic)
+        if not before.get("has_venv"):
+            actions.append({"id": "py_venv", "label": "Create Python virtual environment (venv)"})
+        if before.get("has_requirements"):
+            actions.append({"id": "py_install_reqs", "label": "Install dependencies from requirements.txt"})
+        else:
+            actions.append({"id": "py_generate_reqs", "label": "Generate requirements.txt from current environment"})
+        # Add start script if flask detected
+        if webinfo.get("is_flask") or webinfo.get("is_django"):
+            actions.append({"id": "py_start_script", "label": "Create a start script to run the server"})
+
+    # --- Fullstack
+    if webinfo["is_fullstack"]:
+        actions.append({"id": "fullstack_install", "label": "Install client and server dependencies (npm/pip as detected)"})
+
+    # --- Generic actions
+    if not before.get("has_git"):
+        actions.append({"id": "git_init", "label": "Initialize a new Git repository in this folder"})
+    # always offer README if not present
+    if not (base / "README.md").exists():
+        actions.append({"id": "web_readme", "label": "Create README.md for project"})
+
+    # If no actions, show message and exit
+    if not actions:
+        msg = f"[bold cyan]Project Setup Wizard[/bold cyan]\n\nNo recommended setup actions for this folder.\nDetected type: {project_type}"
+        if RICH:
+            console.print(Panel(msg, title="🧙 Project Setup", border_style="cyan"))
+        else:
+            print(msg)
+        return
+
+    # Build recommendation panel text
+    lines = [
+        "[bold cyan]Project Setup Wizard[/bold cyan]",
+        f"Detected project type: [green]{project_type}[/green]",
+        "",
+        "Recommended actions:"
+    ]
+    for idx, a in enumerate(actions, start=1):
+        lines.append(f"  [{idx}] {a['label']}")
+    lines.append("")
+    lines.append("Apply all recommended actions?")
+
+    msg = "\n".join(lines)
+
+    # Ask: apply all? (use Confirm to keep consistent look)
+    apply_all = False
+    if STATE.get("batch"):
+        apply_all = True
+    else:
+        if RICH:
+            console.print(Panel(msg, title="🧙 Project Setup", border_style="cyan"))
+            from rich.prompt import Confirm
+            apply_all = Confirm.ask("Apply all recommended actions?", default=True)
+        else:
+            print(msg)
+            ans = input("Apply all? (Y/n): ").strip().lower()
+            apply_all = (ans in ("", "y", "yes"))
+
+    # action runner
+    def run_action(act):
+        aid = act["id"]
+        try:
+            # Python venv
+            if aid == "py_venv":
+                target = base / "venv"
+                if STATE["dry_run"]:
+                    p(f"[yellow]DRY-RUN would create venv at:[/yellow] {target}")
+                    return
+                p(f"→ Creating virtual environment at {target} ...")
+                subprocess.run([sys.executable, "-m", "venv", str(target)], cwd=str(base), check=True)
+                p("  ✔ venv created")
+                return
+
+            # pip install -r requirements
+            if aid == "py_install_reqs":
+                req = base / "requirements.txt"
+                if not req.exists():
+                    p(f"[yellow]requirements.txt not found at {req}[/yellow]")
+                    return
+                if STATE["dry_run"]:
+                    p(f"[yellow]DRY-RUN would install dependencies from:[/yellow] {req}")
+                    return
+                p(f"→ Installing dependencies from {req} ...")
+                subprocess.run([sys.executable, "-m", "pip", "install", "-r", str(req)], cwd=str(base), check=True)
+                p("  ✔ Dependencies installed")
+                return
+
+            if aid == "py_generate_reqs":
+                if STATE["dry_run"]:
+                    p("[yellow]DRY-RUN would generate requirements.txt[/yellow]")
+                    return
+                p("→ Generating requirements.txt from current environment ...")
+                res = subprocess.run([sys.executable, "-m", "pip", "freeze"], capture_output=True, text=True)
+                if res.returncode != 0:
+                    p(f"[red]❌ pip freeze failed:[/red] {res.stderr.strip()}")
+                else:
+                    (base / "requirements.txt").write_text(res.stdout, encoding="utf-8")
+                    p(f"  ✔ requirements.txt written at {base / 'requirements.txt'}")
+                return
+
+            # npm install
+            if aid == "node_npm_install":
+                if STATE["dry_run"]:
+                    p("[yellow]DRY-RUN would run 'npm install'[/yellow]")
+                    return
+                p("→ Running 'npm install' ...")
+                try:
+                    subprocess.run(["npm", "install"], cwd=str(base), check=True)
+                    p("  ✔ npm install completed")
+                except FileNotFoundError:
+                    p("[red]❌ npm not found on PATH[/red]")
+                return
+
+            # Create web .gitignore
+            if aid == "web_gitignore":
+                gitignore = base / ".gitignore"
+                if gitignore.exists():
+                    p("• .gitignore already exists, skipping.")
+                else:
+                    contents = "\n".join([
+                        "node_modules/",
+                        "dist/",
+                        ".env",
+                        "build/",
+                        "__pycache__/",
+                    ]) + "\n"
+                    if STATE["dry_run"]:
+                        p("[yellow]DRY-RUN would create .gitignore[/yellow]")
+                    else:
+                        gitignore.write_text(contents, encoding="utf-8")
+                        p("  ✔ .gitignore created")
+                return
+
+            # README
+            if aid == "web_readme":
+                fp = base / "README.md"
+                if fp.exists():
+                    p("• README.md already exists, skipping.")
+                else:
+                    sample = f"# {base.name}\n\nAuto-generated README by CMC Project Setup.\n\nDetected: {project_type}\n"
+                    if STATE["dry_run"]:
+                        p("[yellow]DRY-RUN would create README.md[/yellow]")
+                    else:
+                        fp.write_text(sample, encoding="utf-8")
+                        p("  ✔ README.md created")
+                return
+
+            # assets folder
+            if aid == "web_assets":
+                folder = base / "assets"
+                if folder.exists():
+                    p("• assets/ already exists, skipping.")
+                else:
+                    if STATE["dry_run"]:
+                        p("[yellow]DRY-RUN would create assets/ + sample files[/yellow]")
+                    else:
+                        folder.mkdir(parents=True, exist_ok=True)
+                        (folder / "logo.png").write_bytes(b"")  # placeholder empty file
+                        (folder / "sample.txt").write_text("Assets folder", encoding="utf-8")
+                        p("  ✔ assets/ + sample files created")
+                return
+
+            # preview script (python http.server)
+            if aid == "web_preview":
+                if (base / "preview_server.bat").exists() or (base / "preview_server.sh").exists():
+                    p("• preview script already exists, skipping.")
+                else:
+                    if os.name == "nt":
+                        content = "@echo off\npython -m http.server 8000\npause\n"
+                        out = base / "preview_server.bat"
+                    else:
+                        content = "#!/bin/sh\npython3 -m http.server 8000\n"
+                        out = base / "preview_server.sh"
+                    if STATE["dry_run"]:
+                        p(f"[yellow]DRY-RUN would create preview script: {out}[/yellow]")
+                    else:
+                        out.write_text(content, encoding="utf-8")
+                        try:
+                            out.chmod(0o755)
+                        except Exception:
+                            pass
+                        p(f"  ✔ Preview script created: {out}")
+                return
+
+            # node start script for backend
+            if aid == "node_start_script":
+                script = base / "start_server.bat"
+                if script.exists():
+                    p("• start_server.bat already exists, skipping.")
+                else:
+                    jar_name = None
+                    # pick main js file
+                    choose = None
+                    for name in [ "server.js", "app.js", "index.js" ]:
+                        if (base / name).exists():
+                            choose = name
+                            break
+                    if not choose:
+                        p("[yellow]No Node server entrypoint found (server.js/app.js). Skipping script creation.[/yellow]")
+                        return
+                    content = f"@echo off\nnode {choose}\npause\n"
+                    if STATE["dry_run"]:
+                        p("[yellow]DRY-RUN would create Node start script[/yellow]")
+                    else:
+                        script.write_text(content, encoding="utf-8")
+                        p("  ✔ Node start script created (start_server.bat)")
+                return
+
+            # python start script
+            if aid == "py_start_script":
+                script = base / "start_server.bat"
+                candidate = None
+                for name in ("app.py", "main.py", "wsgi.py"):
+                    if (base / name).exists():
+                        candidate = name
+                        break
+                if not candidate:
+                    p("[yellow]No Python server entrypoint found, skipping start script.[/yellow]")
+                    return
+                content = f"@echo off\n{sys.executable} {candidate}\npause\n"
+                if STATE["dry_run"]:
+                    p("[yellow]DRY-RUN would create Python start script[/yellow]")
+                else:
+                    script.write_text(content, encoding="utf-8")
+                    p("  ✔ Python start script created (start_server.bat)")
+                return
+
+            # fullstack install (client + server)
+            if aid == "fullstack_install":
+                # client
+                cdir = base / "client"
+                sdir = base / "server"
+                if cdir.exists() and (cdir / "package.json").exists():
+                    p("→ Installing client deps ...")
+                    try:
+                        subprocess.run(["npm","install"], cwd=str(cdir), check=True)
+                        p("  ✔ client deps installed")
+                    except Exception as e:
+                        p(f"[red]❌ client npm install failed: {e}[/red]")
+                if sdir.exists():
+                    # server may be node or python
+                    if (sdir / "package.json").exists():
+                        p("→ Installing server (node) deps ...")
+                        try:
+                            subprocess.run(["npm","install"], cwd=str(sdir), check=True)
+                            p("  ✔ server deps installed")
+                        except Exception as e:
+                            p(f"[red]❌ server npm install failed: {e}[/red]")
+                    else:
+                        # try pip
+                        req = sdir / "requirements.txt"
+                        if req.exists():
+                            p("→ Installing server (python) deps ...")
+                            try:
+                                subprocess.run([sys.executable, "-m", "pip", "install", "-r", str(req)], cwd=str(sdir), check=True)
+                                p("  ✔ server deps installed")
+                            except Exception as e:
+                                p(f"[red]❌ pip install failed: {e}[/red]")
+                return
+
+            # git init (uses wrapper _git_run if available)
+            if aid == "git_init":
+                if (base / ".git").exists():
+                    p("• Git repository already exists, skipping git init.")
+                else:
+                    if STATE["dry_run"]:
+                        p("[yellow]DRY-RUN would run: git init[/yellow]")
+                    else:
+                        p("→ Initializing Git repository ...")
+                        try:
+                            # use helper if present
+                            try:
+                                _git_run("git init", cwd=str(base))
+                                p("  ✔ Git repository initialized")
+                            except Exception:
+                                subprocess.run(["git","init"], cwd=str(base), check=True)
+                                p("  ✔ Git repository initialized")
+                        except Exception as e:
+                            p(f"[red]❌ git init failed:[/red] {e}")
+                return
+
+        except Exception as e:
+            p(f"[red]❌ Setup action failed ({aid}):[/red] {e}")
+
+    # Execute based on mode
+    if apply_all:
+        for act in actions:
+            run_action(act)
+    else:
+        for act in actions:
+            label = act["label"]
+            if STATE.get("batch"):
+                do_it = True
+            else:
+                if RICH:
+                    from rich.prompt import Prompt
+                    choice = Prompt.ask(f"{label}? [y/n]", choices=["y","n"], default="y")
+                    do_it = (choice == "y")
+                else:
+                    ans = input(f"{label}? (Y/n): ").strip().lower()
+                    do_it = (ans in ("", "y", "yes"))
+            if do_it:
+                run_action(act)
+
+    # Re-scan AFTER and show summary
+    after = _detect_project_for_setup(base)
+    # build before->after list
+    changed = []
+    if before.get("has_venv") != after.get("has_venv"):
+        changed.append(f"Virtual environment: {before.get('has_venv')} → {after.get('has_venv')}")
+    if before.get("has_requirements") != after.get("has_requirements"):
+        changed.append(f"requirements.txt: {before.get('has_requirements')} → {after.get('has_requirements')}")
+    if before.get("has_node_modules") != after.get("has_node_modules"):
+        changed.append(f"node_modules: {before.get('has_node_modules')} → {after.get('has_node_modules')}")
+    if before.get("has_git") != after.get("has_git"):
+        changed.append(f"Git repo: {before.get('has_git')} → {after.get('has_git')}")
+    if before.get("java_ok") != after.get("java_ok"):
+        changed.append(f"Java OK (MC): {before.get('java_ok')} → {after.get('java_ok')}")
+
+    summary_lines = ["[bold cyan]Setup Summary (Before → After)[/bold cyan]"]
+    if not changed:
+        summary_lines.append("No observable changes detected (folder likely already configured).")
+    else:
+        summary_lines.extend(["  " + c for c in changed])
+
+    summary_text = "\n".join(summary_lines)
+    if RICH:
+        console.print(Panel(summary_text, title="🧙 Project Setup", border_style="cyan"))
+    else:
+        print(summary_text)
+        
+
+
+# ---------- Web Project Setup Wizard ----------
+def op_web_setup():
+    """
+    Web Project Setup Wizard (separate from normal projectsetup).
+
+    Detects:
+      - Static web (index.html)
+      - React / Vue / Svelte / Next.js (via package.json)
+      - Express backend (Node)
+      - Flask / Django web projects (Python)
+      - Fullstack (client/ + server/)
+
+    Then suggests actions like:
+      - npm install
+      - create .gitignore
+      - create README.md
+      - create assets/ + preview script for static sites
+      - create start scripts for Node / Python
+      - git init
+
+    All actions respect STATE["dry_run"] and Batch mode.
+    """
+    global CWD
+    base = CWD
+
+    try:
+        files = [f for f in base.iterdir() if f.is_file()]
+        dirs = [d for d in base.iterdir() if d.is_dir()]
+    except Exception as e:
+        p(f"[red]❌ Cannot scan folder for websetup:[/red] {e}")
+        return
+
+    file_names = [f.name for f in files]
+    dir_names = [d.name for d in dirs]
+
+    # ---------- helpers ----------
+    def _read_small(fp: Path) -> str:
+        try:
+            return fp.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            return ""
+
+    def _load_package_json():
+        if "package.json" not in file_names:
+            return None, {}
+        try:
+            data = json.loads(_read_small(base / "package.json") or "{}")
+            deps = {}
+            deps.update(data.get("dependencies", {}) or {})
+            deps.update(data.get("devDependencies", {}) or {})
+            lower = {k.lower(): v for k, v in deps.items()}
+            return data, lower
+        except Exception:
+            return None, {}
+
+    pkg, deps = _load_package_json()
+
+    # ---------- detection ----------
+    is_static = any(fn.lower() in ("index.html", "index.htm") for fn in file_names)
+    is_node = "package.json" in file_names
+    has_node_modules = "node_modules" in dir_names
+
+    is_react = "react" in deps or "react-dom" in deps
+    is_next = "next" in deps
+    is_vue = "vue" in deps
+    is_svelte = "svelte" in deps or any(fn.lower().endswith(".svelte") for fn in file_names)
+
+    # Express backend: deps or server.js/app.js
+    is_express = (
+        "express" in deps
+        or any(fn.lower() in ("server.js", "app.js", "index.js") for fn in file_names)
+    )
+
+    # Python web: Flask / Django
+    is_django = any(fn.lower() == "manage.py" for fn in file_names)
+    is_flask = False
+    if not is_django:
+        for f in files:
+            if f.suffix == ".py":
+                s = _read_small(f)
+                if "import flask" in s or "from flask" in s:
+                    is_flask = True
+                    break
+
+    # Fullstack: client + server folders
+    is_fullstack = "client" in dir_names and "server" in dir_names
+
+    # ---------- label ----------
+    project_type = "Unknown Web Project"
+    if is_fullstack:
+        project_type = "Fullstack Project (client + server)"
+    elif is_next:
+        project_type = "Next.js Project"
+    elif is_react:
+        project_type = "React Project"
+    elif is_vue:
+        project_type = "Vue Project"
+    elif is_svelte:
+        project_type = "Svelte Project"
+    elif is_express and is_node:
+        project_type = "Express (Node.js) Backend"
+    elif is_django:
+        project_type = "Django Web Project"
+    elif is_flask:
+        project_type = "Flask Web Project"
+    elif is_static:
+        project_type = "Web Project (Static HTML/CSS/JS)"
+    elif is_node:
+        project_type = "Node.js Web Project"
+
+    # ---------- build actions ----------
+    actions = []
+
+    # Git
+    has_git = (base / ".git").exists()
+    if not has_git:
+        actions.append({"id": "git_init", "label": "Initialize a new Git repository in this folder"})
+
+    # Static web
+    if is_static and not is_node:
+        actions.append({"id": "web_gitignore", "label": "Create basic web .gitignore"})
+        actions.append({"id": "web_readme", "label": "Create README.md for website"})
+        actions.append({"id": "web_assets", "label": "Create assets/ folder and sample files"})
+        actions.append({"id": "web_preview", "label": "Create simple local preview script (python http.server)"})
+
+    # Frontend frameworks
+    if is_node and (is_react or is_vue or is_svelte or is_next):
+        if not has_node_modules:
+            actions.append({"id": "npm_install", "label": "Run 'npm install' to restore dependencies"})
+        actions.append({"id": "web_gitignore", "label": "Create framework .gitignore"})
+        actions.append({"id": "web_readme", "label": "Create README.md for this project"})
+
+    # Express backend
+    if is_express:
+        if not has_node_modules:
+            actions.append({"id": "npm_install", "label": "Run 'npm install' for backend"})
+        actions.append({"id": "node_start", "label": "Create start_server.bat for Node backend"})
+
+    # Python web (Flask/Django)
+    is_python_web = is_flask or is_django
+    if is_python_web:
+        has_venv = (base / "venv").exists() or (base / ".venv").exists()
+        has_requirements = (base / "requirements.txt").exists()
+        if not has_venv:
+            actions.append({"id": "py_venv", "label": "Create Python virtual environment (venv)"})
+        if has_requirements:
+            actions.append({"id": "py_install_reqs", "label": "Install dependencies from requirements.txt"})
+        else:
+            actions.append({"id": "py_gen_reqs", "label": "Generate requirements.txt from current environment"})
+        actions.append({"id": "py_start", "label": "Create start_server.bat for Python web app"})
+
+    # Fullstack convenience
+    if is_fullstack:
+        actions.append({"id": "fullstack_install", "label": "Install client + server dependencies"})
+
+    # README for any web project if missing
+    if not (base / "README.md").exists():
+        actions.append({"id": "web_readme", "label": "Create README.md for this project"})
+
+    # If nothing to do:
+    if not actions:
+        msg = f"[bold cyan]Web Project Setup Wizard[/bold cyan]\n\nNo recommended actions.\nDetected web type: {project_type}"
+        if RICH:
+            console.print(Panel(msg, title="🌐 Web Setup", border_style="cyan"))
+        else:
+            print(msg)
+        return
+
+    # ---------- build wizard text ----------
+    lines = [
+        "[bold cyan]Web Project Setup Wizard[/bold cyan]",
+        f"Detected project type: [green]{project_type}[/green]",
+        "",
+        "Recommended actions:"
+    ]
+    for i, a in enumerate(actions, 1):
+        lines.append(f"  [{i}] {a['label']}")
+    lines.append("")
+    lines.append("Apply all recommended actions?")
+
+    msg = "\n".join(lines)
+
+    # ---------- ask: apply all? ----------
+    if STATE.get("batch"):
+        apply_all = True
+    else:
+        if RICH:
+            console.print(Panel(msg, title="🌐 Web Setup", border_style="cyan"))
+            from rich.prompt import Confirm
+            apply_all = Confirm.ask("Apply all recommended actions?", default=True)
+        else:
+            print(msg)
+            ans = input("Apply all? (Y/n): ").strip().lower()
+            apply_all = ans in ("", "y", "yes")
+
+    # ---------- action executors ----------
+    def run_action(a):
+        aid = a["id"]
+        try:
+            # Git init
+            if aid == "git_init":
+                if (base / ".git").exists():
+                    p("• Git repo already exists, skipping git init.")
+                    return
+                if STATE["dry_run"]:
+                    p("[yellow]DRY-RUN would run 'git init'[/yellow]")
+                    return
+                p("→ Initializing Git repository ...")
+                subprocess.run(["git", "init"], cwd=str(base), check=True)
+                p("  ✔ Git repository initialized")
+                return
+
+            # npm install
+            if aid == "npm_install":
+                if STATE["dry_run"]:
+                    p("[yellow]DRY-RUN would run 'npm install'[/yellow]")
+                    return
+                p("→ Running 'npm install' ...")
+                try:
+                    subprocess.run(["npm", "install"], cwd=str(base), check=True)
+                    p("  ✔ npm install completed")
+                except FileNotFoundError:
+                    p("[red]❌ npm not found on PATH[/red]")
+                return
+
+            # web .gitignore
+            if aid == "web_gitignore":
+                gi = base / ".gitignore"
+                if gi.exists():
+                    p("• .gitignore already exists, skipping.")
+                    return
+                content = "\n".join([
+                    "node_modules/",
+                    "dist/",
+                    "build/",
+                    ".env",
+                    ".DS_Store",
+                    "__pycache__/",
+                    "*.log",
+                ]) + "\n"
+                if STATE["dry_run"]:
+                    p("[yellow]DRY-RUN would create .gitignore[/yellow]")
+                else:
+                    gi.write_text(content, encoding="utf-8")
+                    p("  ✔ .gitignore created")
+                return
+
+            # README
+            if aid == "web_readme":
+                fp = base / "README.md"
+                if fp.exists():
+                    p("• README.md already exists, skipping.")
+                    return
+                text = f"# {base.name}\n\nAuto-generated by CMC Web Setup.\n\nType: {project_type}\n"
+                if STATE["dry_run"]:
+                    p("[yellow]DRY-RUN would create README.md[/yellow]")
+                else:
+                    fp.write_text(text, encoding="utf-8")
+                    p("  ✔ README.md created")
+                return
+
+            # assets
+            if aid == "web_assets":
+                folder = base / "assets"
+                if folder.exists():
+                    p("• assets/ already exists, skipping.")
+                    return
+                if STATE["dry_run"]:
+                    p("[yellow]DRY-RUN would create assets/ folder[/yellow]")
+                else:
+                    folder.mkdir(parents=True, exist_ok=True)
+                    (folder / "sample.txt").write_text("Assets folder", encoding="utf-8")
+                    p("  ✔ assets/ folder created")
+                return
+
+            # preview script for static sites
+            if aid == "web_preview":
+                if os.name == "nt":
+                    out = base / "preview_server.bat"
+                    content = "@echo off\npython -m http.server 8000\npause\n"
+                else:
+                    out = base / "preview_server.sh"
+                    content = "#!/bin/sh\npython3 -m http.server 8000\n"
+                if out.exists():
+                    p("• Preview script already exists, skipping.")
+                    return
+                if STATE["dry_run"]:
+                    p(f"[yellow]DRY-RUN would create preview script {out.name}[/yellow]")
+                else:
+                    out.write_text(content, encoding="utf-8")
+                    try:
+                        out.chmod(0o755)
+                    except Exception:
+                        pass
+                    p(f"  ✔ Preview script created: {out.name}")
+                return
+
+            # Node backend start script
+            if aid == "node_start":
+                script = base / "start_server.bat"
+                if script.exists():
+                    p("• start_server.bat already exists, skipping.")
+                    return
+                entry = None
+                for name in ("server.js", "app.js", "index.js"):
+                    if (base / name).exists():
+                        entry = name
+                        break
+                if not entry:
+                    p("[yellow]No server.js/app.js/index.js found, skipping start script.[/yellow]")
+                    return
+                content = f"@echo off\nnode {entry}\npause\n"
+                if STATE["dry_run"]:
+                    p("[yellow]DRY-RUN would create Node start_server.bat[/yellow]")
+                else:
+                    script.write_text(content, encoding="utf-8")
+                    p("  ✔ Node start script created (start_server.bat)")
+                return
+
+            # Python venv
+            if aid == "py_venv":
+                target = base / "venv"
+                if target.exists():
+                    p("• venv already exists, skipping.")
+                    return
+                if STATE["dry_run"]:
+                    p(f"[yellow]DRY-RUN would create venv at {target}[/yellow]")
+                else:
+                    p(f"→ Creating venv at {target} ...")
+                    subprocess.run([sys.executable, "-m", "venv", str(target)], cwd=str(base), check=True)
+                    p("  ✔ venv created")
+                return
+
+            # pip install -r requirements
+            if aid == "py_install_reqs":
+                req = base / "requirements.txt"
+                if not req.exists():
+                    p("[yellow]requirements.txt not found, skipping install.[/yellow]")
+                    return
+                if STATE["dry_run"]:
+                    p("[yellow]DRY-RUN would install from requirements.txt[/yellow]")
+                else:
+                    p(f"→ Installing from {req} ...")
+                    subprocess.run([sys.executable, "-m", "pip", "install", "-r", str(req)], cwd=str(base), check=True)
+                    p("  ✔ dependencies installed")
+                return
+
+            # generate requirements.txt
+            if aid == "py_gen_reqs":
+                if STATE["dry_run"]:
+                    p("[yellow]DRY-RUN would generate requirements.txt[/yellow]")
+                else:
+                    p("→ Generating requirements.txt from current environment ...")
+                    res = subprocess.run([sys.executable, "-m", "pip", "freeze"], capture_output=True, text=True)
+                    if res.returncode != 0:
+                        p(f"[red]❌ pip freeze failed:[/red] {res.stderr.strip()}")
+                    else:
+                        (base / "requirements.txt").write_text(res.stdout, encoding="utf-8")
+                        p("  ✔ requirements.txt written")
+                return
+
+            # Python start script
+            if aid == "py_start":
+                script = base / "start_server.bat"
+                if script.exists():
+                    p("• start_server.bat already exists, skipping.")
+                    return
+                candidate = None
+                for name in ("app.py", "main.py", "wsgi.py"):
+                    if (base / name).exists():
+                        candidate = name
+                        break
+                if not candidate:
+                    p("[yellow]No Python entrypoint (app.py/main.py/wsgi.py), skipping start script.[/yellow]")
+                    return
+                content = f"@echo off\n{sys.executable} {candidate}\npause\n"
+                if STATE["dry_run"]:
+                    p("[yellow]DRY-RUN would create Python start_server.bat[/yellow]")
+                else:
+                    script.write_text(content, encoding="utf-8")
+                    p("  ✔ Python start script created (start_server.bat)")
+                return
+
+            # fullstack install
+            if aid == "fullstack_install":
+                cdir = base / "client"
+                sdir = base / "server"
+                if cdir.exists() and (cdir / "package.json").exists():
+                    p("→ Installing client dependencies (npm install in client/) ...")
+                    try:
+                        subprocess.run(["npm", "install"], cwd=str(cdir), check=True)
+                        p("  ✔ client deps installed")
+                    except Exception as e:
+                        p(f"[red]❌ client npm install failed:[/red] {e}")
+                if sdir.exists():
+                    if (sdir / "package.json").exists():
+                        p("→ Installing server Node deps (npm install in server/) ...")
+                        try:
+                            subprocess.run(["npm", "install"], cwd=str(sdir), check=True)
+                            p("  ✔ server Node deps installed")
+                        except Exception as e:
+                            p(f"[red]❌ server npm install failed:[/red] {e}")
+                    elif (sdir / "requirements.txt").exists():
+                        p("→ Installing server Python deps (pip install -r requirements.txt) ...")
+                        try:
+                            subprocess.run(
+                                [sys.executable, "-m", "pip", "install", "-r", str(sdir / "requirements.txt")],
+                                cwd=str(sdir),
+                                check=True,
+                            )
+                            p("  ✔ server Python deps installed")
+                        except Exception as e:
+                            p(f"[red]❌ server pip install failed:[/red] {e}")
+                return
+
+        except Exception as e:
+            p(f"[red]❌ Web setup action failed ({aid}):[/red] {e}")
+
+    # ---------- run actions ----------
+    if apply_all:
+        for a in actions:
+            run_action(a)
+    else:
+        for a in actions:
+            label = a["label"]
+            if STATE.get("batch"):
+                do_it = True
+            else:
+                if RICH:
+                    from rich.prompt import Prompt
+                    choice = Prompt.ask(f"{label}? [y/n]", choices=["y", "n"], default="y")
+                    do_it = choice == "y"
+                else:
+                    ans = input(f"{label}? (Y/n): ").strip().lower()
+                    do_it = ans in ("", "y", "yes")
+            if do_it:
+                run_action(a)
+
+    # Final small summary
+    summary = "[bold cyan]Web setup complete.[/bold cyan]"
+    if RICH:
+        console.print(Panel(summary, title="🌐 Web Setup", border_style="cyan"))
+    else:
+        print("Web setup complete.")
+
+
+
+
+def _format_state_flag(label: str, before, after, true_label="Present", false_label="Missing", na_label="N/A"):
+    def fmt(x):
+        if x is None:
+            return na_label
+        return true_label if x else false_label
+    if before == after:
+        return None
+    return f"{label}: {fmt(before)} → {fmt(after)}"
+    
+    
+
+def _detect_project_for_setup(base: Path):
+    """
+    Detect project type and return a dict with keys that the projectsetup
+    wizard expects:
+
+        {
+          "project_type": str,
+          "is_python": bool,
+          "is_node": bool,
+          "is_minecraft": bool,
+          "has_venv": bool,
+          "has_requirements": bool,
+          "has_node_modules": bool,
+          "has_git": bool,
+          "required_java": int | None,
+          "java_ok": bool,
+        }
+    """
+    try:
+        files = [f for f in base.iterdir() if f.is_file()]
+        dirs = [d for d in base.iterdir() if d.is_dir()]
+    except Exception:
+        files, dirs = [], []
+
+    file_names = [f.name for f in files]
+    dir_names = [d.name for d in dirs]
+
+    # ---------- Python detection ----------
+    is_python = (
+        "main.py" in file_names
+        or "requirements.txt" in file_names
+        or any(f.suffix == ".py" for f in files)
+    )
+    has_venv = (base / "venv").exists() or (base / ".venv").exists()
+    has_requirements = (base / "requirements.txt").exists()
+
+    # ---------- Node / frontend detection ----------
+    is_node = "package.json" in file_names
+    has_node_modules = "node_modules" in dir_names
+
+    # ---------- Minecraft server detection ----------
+    mc_jar = None
+    for name in file_names:
+        lower = name.lower()
+        if lower.endswith(".jar") and any(
+            tag in lower for tag in ("server", "forge", "paper", "fabric", "purpur", "spigot", "bukkit")
+        ):
+            mc_jar = name
+            break
+
+    is_minecraft = mc_jar is not None
+    required_java = None
+    java_ok = True
+
+    if is_minecraft:
+        # Try to infer Minecraft version from jar name
+        mc_version = "Unknown"
+        m = re.search(r"(\d+\.\d+(?:\.\d+)?)", mc_jar)
+        if m:
+            mc_version = m.group(1)
+
+        try:
+            parts = mc_version.split(".")
+            major = int(parts[0]) if len(parts) > 0 else 0
+            minor = int(parts[1]) if len(parts) > 1 else 0
+            key = (major, minor)
+
+            # Simple mapping: same as in project scan
+            if key < (1, 17):
+                required_java = 8
+            elif key < (1, 18):
+                required_java = 16
+            elif key < (1, 20):
+                required_java = 17
+            else:
+                required_java = 21
+        except Exception:
+            required_java = None
+
+        active_java = STATE.get("java_version", "?")
+        if required_java and active_java != "?":
+            java_ok = str(required_java) in str(active_java)
+        else:
+            java_ok = True
+
+    # ---------- Git detection ----------
+    has_git = (base / ".git").exists()
+
+    # ---------- Project type label ----------
+    project_type = "Unknown"
+    if is_minecraft:
+        project_type = "Minecraft Server"
+    elif is_node:
+        project_type = "Node.js Project"
+    elif is_python:
+        project_type = "Python Project"
+
+    return {
+        "project_type": project_type,
+        "is_python": is_python,
+        "is_node": is_node,
+        "is_minecraft": is_minecraft,
+        "has_venv": has_venv,
+        "has_requirements": has_requirements,
+        "has_node_modules": has_node_modules,
+        "has_git": has_git,
+        "required_java": required_java,
+        "java_ok": java_ok,
+    }
+
+    
+
+
+def op_project_setup():
+    """
+    Project Setup Wizard:
+      - Detect project type
+      - Recommend actions (Python / Node / MC / Unity / Java / Web / Git)
+      - Optionally apply all automatically or ask per-action
+      - Show BEFORE → AFTER summary using a second detection pass
+    """
+    global CWD
+    base = CWD
+
+    # We'll also need the current file list for some actions (e.g. MC start script)
+    try:
+        files = [f for f in base.iterdir() if f.is_file()]
+    except Exception:
+        files = []
+    file_names = [f.name for f in files]
+
+    before = _detect_project_for_setup(base)
+    project_type = before["project_type"]
+
+    actions = []
+
+    # Python actions
+    if before["is_python"]:
+        if not before["has_venv"]:
+            actions.append({
+                "id": "py_venv",
+                "label": "Create Python virtual environment (venv)"
+            })
+        if before["has_requirements"]:
+            actions.append({
+                "id": "py_install_reqs",
+                "label": "Install dependencies from requirements.txt"
+            })
+        else:
+            actions.append({
+                "id": "py_generate_reqs",
+                "label": "Generate requirements.txt from current environment"
+            })
+
+    # Node.js actions
+    if before["is_node"]:
+        if not before["has_node_modules"]:
+            actions.append({
+                "id": "node_npm_install",
+                "label": "Run 'npm install' to restore dependencies"
+            })
+        # basic gitignore for Node projects
+        if not (base / ".gitignore").exists():
+            actions.append({
+                "id": "node_gitignore",
+                "label": "Create a basic .gitignore for Node projects"
+            })
+
+    # Minecraft actions
+    if before["is_minecraft"]:
+        if before["required_java"] is not None and not before["java_ok"]:
+            actions.append({
+                "id": "mc_switch_java",
+                "label": f"Switch Java to {before['required_java']} for this Minecraft server",
+                "java_version": before["required_java"],
+            })
+        # simple start script helper for Windows
+        has_start_script = any(
+            fn.lower().endswith((".bat", ".cmd")) and "start" in fn.lower()
+            for fn in file_names
+        )
+        if not has_start_script:
+            actions.append({
+                "id": "mc_start_script",
+                "label": "Create a basic Windows start script for this server (start_server.bat)"
+            })
+
+    # Generic Git action
+    if not before["has_git"]:
+        actions.append({
+            "id": "git_init",
+            "label": "Initialize a new Git repository in this folder"
+        })
+
+    # If no actions detected
+    if not actions:
+        msg = f"[bold cyan]Project Setup Wizard[/bold cyan]\n\nNo recommended setup actions for this folder.\nDetected type: {project_type}"
+        if RICH:
+            console.print(Panel(msg, title="🧙 Project Setup", border_style="cyan"))
+        else:
+            print(msg)
+        return
+
+    # Build recommendation text
+    lines_txt = [
+        "[bold cyan]Project Setup Wizard[/bold cyan]",
+        f"Detected project type: [green]{project_type}[/green]",
+        "",
+        "Recommended actions:"
+    ]
+    for idx, act in enumerate(actions, start=1):
+        lines_txt.append(f"  [{idx}] {act['label']}")
+    lines_txt.append("")
+    lines_txt.append("Apply all recommended actions?")
+
+    msg = "\n".join(lines_txt)
+
+    # Ask: apply all or manual?
+    apply_all = False
+    if STATE["batch"]:
+        apply_all = True
+    else:
+        if RICH:
+            console.print(Panel(msg, title="🧙 Project Setup", border_style="cyan"))
+            from rich.prompt import Confirm
+            apply_all = Confirm.ask("Apply all recommended actions?", default=True)
+        else:
+            print(msg)
+            ans = input("Apply all? (Y/n): ").strip().lower()
+            apply_all = (ans in ("", "y", "yes"))
+
+
+
+    # Execute actions
+    def run_action(act):
+        aid = act["id"]
+        try:
+            if aid == "py_venv":
+                target = (base / "venv")
+                if STATE["dry_run"]:
+                    p(f"[yellow]DRY-RUN would create venv at:[/yellow] {target}")
+                else:
+                    p(f"→ Creating virtual environment at {target} ...")
+                    import subprocess as _sp
+                    _sp.run([sys.executable, "-m", "venv", str(target)], cwd=str(base), check=True)
+                    p("  ✔ venv created")
+
+            elif aid == "py_install_reqs":
+                req = base / "requirements.txt"
+                if not req.exists():
+                    p(f"[yellow]requirements.txt not found at {req}[/yellow]")
+                else:
+                    if STATE["dry_run"]:
+                        p(f"[yellow]DRY-RUN would install dependencies from:[/yellow] {req}")
+                    else:
+                        p(f"→ Installing dependencies from {req} ...")
+                        import subprocess as _sp
+                        _sp.run([sys.executable, "-m", "pip", "install", "-r", str(req)],
+                                cwd=str(base), check=True)
+                        p("  ✔ Dependencies installed")
+
+            elif aid == "py_generate_reqs":
+                if STATE["dry_run"]:
+                    p(f"[yellow]DRY-RUN would generate requirements.txt[/yellow]")
+                else:
+                    p("→ Generating requirements.txt from current environment ...")
+                    import subprocess as _sp
+                    result = _sp.run([sys.executable, "-m", "pip", "freeze"],
+                                     capture_output=True, text=True)
+                    if result.returncode != 0:
+                        p(f"[red]❌ pip freeze failed:[/red] {result.stderr.strip()}")
+                    else:
+                        (base / "requirements.txt").write_text(result.stdout, encoding="utf-8")
+                        p(f"  ✔ requirements.txt written at {base / 'requirements.txt'}")
+
+            elif aid == "node_npm_install":
+                if STATE["dry_run"]:
+                    p(f"[yellow]DRY-RUN would run 'npm install'[/yellow]")
+                else:
+                    p("→ Running 'npm install' ...")
+                    import subprocess as _sp
+                    try:
+                        _sp.run(["npm", "install"], cwd=str(base), check=True)
+                        p("  ✔ npm install completed")
+                    except FileNotFoundError:
+                        p("[red]❌ npm not found on PATH[/red]")
+
+            elif aid == "node_gitignore":
+                gitignore = base / ".gitignore"
+                if gitignore.exists():
+                    p("• .gitignore already exists, skipping.")
+                else:
+                    contents = "\n".join([
+                        "node_modules/",
+                        "npm-debug.log",
+                        "yarn-error.log",
+                        "dist/",
+                        "build/",
+                    ]) + "\n"
+                    if STATE["dry_run"]:
+                        p(f"[yellow]DRY-RUN would create .gitignore with Node patterns[/yellow]")
+                    else:
+                        gitignore.write_text(contents, encoding="utf-8")
+                        p("  ✔ .gitignore created for Node project")
+
+            elif aid == "mc_switch_java":
+                ver = str(act.get("java_version", ""))
+                if not ver:
+                    p("[yellow]No required Java version computed, skipping Java switch.[/yellow]")
+                else:
+                    if STATE["dry_run"]:
+                        p(f"[yellow]DRY-RUN would run: java change {ver}[/yellow]")
+                    else:
+                        p(f"→ Switching Java to {ver} via 'java change' ...")
+                        handle_command(f"java change {ver}")
+
+            elif aid == "mc_start_script":
+                script = base / "start_server.bat"
+                if script.exists():
+                    p("• start_server.bat already exists, skipping.")
+                else:
+                    jar_name = None
+                    for name in file_names:
+                        if name.lower().endswith(".jar"):
+                            jar_name = name
+                            break
+                    if not jar_name:
+                        p("[yellow]No server jar found to create start script.[/yellow]")
+                    else:
+                        contents = (
+                            "@echo off\n"
+                            f"java -Xmx4G -Xms1G -jar \"{jar_name}\" nogui\n"
+                            "pause\n"
+                        )
+                        if STATE["dry_run"]:
+                            p(f"[yellow]DRY-RUN would create start_server.bat[/yellow]")
+                        else:
+                            script.write_text(contents, encoding="utf-8")
+                            p("  ✔ start_server.bat created")
+
+            elif aid == "git_init":
+                if (base / ".git").exists():
+                    p("• Git repository already exists, skipping git init.")
+                else:
+                    if STATE["dry_run"]:
+                        p(f"[yellow]DRY-RUN would run: git init[/yellow]")
+                    else:
+                        p("→ Initializing Git repository ...")
+                        try:
+                            _git_run("git init", cwd=str(base))
+                            p("  ✔ Git repository initialized")
+                        except Exception as e:
+                            p(f"[red]❌ git init failed:[/red] {e}")
+
+        except Exception as e:
+            p(f"[red]❌ Setup action failed ({aid}):[/red] {e}")
+
+    # Run actions based on mode
+    if apply_all:
+        for act in actions:
+            run_action(act)
+    else:
+        # Manual mode: ask for each action
+        for act in actions:
+            label = act["label"]
+            if STATE["batch"]:
+                do_it = True
+            else:
+                if RICH:
+                    from rich.prompt import Confirm as _Confirm
+                    do_it = _Confirm.ask(f"{label}?", default=True)
+                else:
+                    ans = input(f"{label}? (Y/n): ").strip().lower()
+                    do_it = (ans in ("", "y", "yes"))
+            if do_it:
+                run_action(act)
+
+    # AFTER state: re-scan and show summary
+    after = _detect_project_for_setup(base)
+
+    summary_lines = ["[bold cyan]Setup Summary (Before → After)[/bold cyan]"]
+    changed = []
+
+    changed_fields = [
+        ("Virtual environment", before["has_venv"], after["has_venv"]),
+        ("requirements.txt", before["has_requirements"], after["has_requirements"]),
+        ("node_modules", before["has_node_modules"], after["has_node_modules"]),
+        ("Git repository", before["has_git"], after["has_git"]),
+        ("Java OK for Minecraft", before["java_ok"], after["java_ok"]),
+    ]
+
+    for label, b, a in changed_fields:
+        line = _format_state_flag(
+            label, b, a,
+            true_label="Present/OK",
+            false_label="Missing/Not OK",
+            na_label="N/A",
+        )
+        if line:
+            changed.append("  " + line)
+
+    if not changed:
+        summary_lines.append("No observable changes detected (folder is likely already configured).")
+    else:
+        summary_lines.extend(changed)
+
+    text = "\n".join(summary_lines)
+
+    if RICH:
+        console.print(Panel(text, title="🧙 Project Setup", border_style="cyan"))
+    else:
+        print(text)
+
+
+
+
 
 # ---------- Internet ops ----------
 DOWNLOAD_CAP_BYTES = 1_000_000_000  # 1 GB
@@ -1644,7 +3014,7 @@ COMMAND_HINTS = [
     "zip","unzip","open","explore","backup","run",
     "download","downloadlist","open url",
     "batch on","batch off","dry-run on","dry-run off","ssl on","ssl off","status","log","undo",
-    "macro add <name> = <commands>","macro run <name>","macro list","macro delete <name>","macro clear","help","exit"
+    "macro add <name> = <commands>","macro run <name>","macro list","macro delete <name>","macro clear","help","exit", "search web <query>","youtube <query>","webcreate",
 ]
 
 def suggest_commands(s: str):
@@ -1747,6 +3117,48 @@ def handle_command(s: str):
     # Normalize once
     low = s.lower()
     
+    
+    # ---------- Project Scan ----------
+    m = re.match(r"^projectscan$", s, re.I)
+    if m:
+        try:
+            op_project_scan()
+        except Exception as e:
+            p(f"[red]❌ Project scan failed:[/red] {e}")
+        return
+        
+        
+    # ---------- Project Setup Wizard ----------
+    m = re.match(r"^projectsetup$", s, re.I)
+    if m:
+        try:
+            op_project_setup()
+        except Exception as e:
+            p(f"[red]❌ Project setup failed:[/red] {e}")
+        return
+        
+    # ---------- Web Project Setup ----------
+    if low == "websetup":
+        try:
+            op_web_setup()
+        except Exception as e:
+            p(f"[red]❌ Web setup failed:[/red] {e}")
+        return
+
+
+
+    # ---------- Web Project Create ----------
+    if low == "webcreate":
+        try:
+            op_web_create()
+        except Exception as e:
+            p(f"[red]❌ Web project creation failed:[/red] {e}")
+        return
+
+
+
+
+    
 
     # ---------- Timer command ----------
     m = re.match(r"^timer\s+(\d+)(?:\s+(.+))?$", s, re.I)
@@ -1808,8 +3220,15 @@ def handle_command(s: str):
 
 
     # ---------- Control ----------
-    if low in ("help", "?"):
-        return show_help()
+    m = re.match(r"^help(?:\s+(.+))?$", s, re.I)
+    if m or low == "?":
+        topic = None
+        if m:
+            raw = m.group(1)
+            if raw:
+                topic = raw.strip()
+        show_help(topic)
+        return
     if low == "status":
         status_panel(); return
     if low == "batch on":
@@ -2380,151 +3799,413 @@ def handle_command(s: str):
 
 # ---------- Help ----------
 
-def show_help():
-    content = (
-"🧠 BASIC NAV — Move around, inspect folders/files\n"
-"  pwd                      Show current directory\n"
-"  cd 'C:/path'             Change directory\n"
-"  back / home              Go back (history) or to user home\n"
-"  list ['C:/path']         List contents (optional path)\n"
-"  info 'path'              Show size, type, modified time\n"
-"  find 'name'              Find files by name (within current folder)\n"
-"  findext '.ext'           Find by file extension\n"
-"  recent ['path']          Most recently modified files\n"
-"  biggest ['path']         Biggest files/folders\n"
-"  search 'text'            Search inside text-like files\n\n"
-"────────────────────────────────────────────────────────\n\n"
-"🗂 FILE OPS — Create, edit, move, copy, delete, zip\n"
-"  create file 'name.txt' in 'C:/path'\n"
-"  create folder 'Name' in 'C:/path'\n"
-"  write 'C:/path/file.txt' text='hello'\n"
-"  read  'C:/path/file.txt' [head=50]\n"
-"  move  'C:/src' to 'C:/dst'\n"
-"  copy  'C:/src' to 'C:/dst'\n"
-"  rename 'C:/path/old' to 'NewName'\n"
-"  delete 'C:/path'\n"
-"  zip   'C:/path'              → creates C:/path.zip\n"
-"  unzip 'C:/file.zip' to 'C:/dest'\n"
-"  open  'C:/path/or/app.exe'   Open file/app\n"
-"  explore 'C:/path'            Open in Explorer\n"
-"  backup 'C:/src' 'C:/dest'    Zip into dest with timestamp\n"
-"  run 'C:/path/app.exe'              Run any file or command\n"
-"  run 'cmd.exe /c start \"\" \"C:/Path/File.bat\"'  Launch batch or shortcut externally\n"
-"  run 'C:/path/script.py' in 'C:/folder'   Run with working directory\n\n"
-"────────────────────────────────────────────────────────\n\n"
-"🌍 INTERNET — Download with 1 GB safety cap\n"
-"  download 'https://...' to 'C:/Downloads'\n"
-"  downloadlist 'C:/urls.txt' to 'C:/Downloads'\n"
-"  open url 'https://example.com'\n"
-"  search web <query>          Open Google search in your default browser\n"
-"  youtube <query>             Search YouTube in your default browser\n\n"
-"────────────────────────────────────────────────────────\n\n"
-"🧰 MACROS (persistent) — Save and run command sequences\n"
-"  macro add <name> = <commands>\n"
-"  macro run <name>\n"
-"  macro list\n"
-"  macro delete <name>    macro clear\n"
-"  Vars available: %DATE%, %NOW%, %HOME%\n\n"
-"────────────────────────────────────────────────────────\n\n"
-"⚡ ALIASES — Custom command shortcuts (lightweight macros)\n"
-"  alias add <name> <command>    Create a shortcut\n"
-"  alias list                    Show saved aliases\n"
-"  alias delete <name>           Remove a shortcut\n"
-"  alias clear                   Delete all aliases\n\n"
-"  Examples:\n"
-"    alias add g search web\n"
-"    alias add yt youtube\n"
-"    g python subprocess example\n"
-"    yt trackmania drift\n\n"
-"────────────────────────────────────────────────────────\n\n"
-"⏲️ TIMER & REMINDERS — Run commands or messages after delay\n"
-"  timer <seconds> [action]\n"
-"      Start a countdown timer (in seconds).\n"
-"      When time expires:\n"
-"        • If [action] is text, it prints a reminder.\n"
-"        • If [action] starts with 'run' or 'macro', that command is executed automatically.\n\n"
-"  Examples:\n"
-"      timer 10 \"Take a break!\"\n"
-"      timer 5 run macro run publish_public\n"
-"      timer 60 macro run backup_journey\n\n"
-"────────────────────────────────────────────────────────\n\n"
-"🪟 CMD PASSTHROUGH — Use real Windows commands inside CMC\n"
-"  cmd                         Open full Windows Command Prompt (type 'exit' to return)\n"
-"  cmd <command>               Run a Windows CMD command directly\n\n"
-"  Examples:\n"
-"      cmd dir\n"
-"      cmd ipconfig /all\n"
-"      cmd sfc /scannow\n\n"
-"────────────────────────────────────────────────────────\n\n"
-"⛭ CONTROL — Toggles & utilities\n"
-"  batch on | batch off        Auto-confirm prompts (skip Y/N)\n"
-"  dry-run on | dry-run off    Preview actions without executing\n"
-"  ssl on | ssl off            Toggle HTTPS certificate verification\n"
-"  sysinfo                    Show CPU, memory, disk, and system info\n"
-"  status                     Show current Computer Main Centre state (Batch / SSL / Dry-Run / Java)\n"
-"  log                        Show operation history\n"
-"  undo                       Undo last reversible action\n"
-"  sleep <seconds>             Pause execution in macros (e.g., sleep 3)\n"
-"  sendkeys \"<text>{ENTER}\"     Send keyboard input to the active window\n"
-"  help                       Display this help menu\n"
-"  exit                       Close Computer Main Centre\n\n"
-"────────────────────────────────────────────────────────\n\n"
-"☕ JAVA — Manage system-wide Java environment\n"
-"  java list                   Auto-detect and show all installed Java versions\n"
-"  java version                Show currently active Java version and JAVA_HOME\n"
-"  java change <version|name|path>  Switch to a specific JDK/JRE (supports full path)\n"
-"  java reload                 Reload JAVA_HOME and PATH from the Windows registry\n\n"
-"  Examples:\n"
-"    java change 17\n"
-"    java change jdk-21.0.8.9-hotspot\n"
-"    java change 'C:/Program Files/Java/jdk-17'\n"
-"    java reload\n"
-"────────────────────────────────────────────────────────\n\n"
-"🔎 LOCAL PATH INDEX (no server) — Instant search of your drives\n"
-"  /qfind <terms> [limit]      Multi-word AND search (default limit 20)\n"
-"  /qcount                     Show total indexed paths\n"
-"  /qbuild [targets...]        Rebuild/refresh index (e.g. %USERPROFILE% C E F)\n\n"
-"────────────────────────────────────────────────────────\n\n"
-"🌐 GIT / GITHUB — Upload & sync projects\n"
-"  /gitsetup \"RepoName\"          Create & push a brand-new GitHub repository\n"
-"  /gitlink \"URL\"                Link this folder to an existing GitHub repo\n"
-"  /gitupdate \"message\"          Add → Commit → Push recent changes\n"
-"  /gitpull                       Pull and merge latest updates from GitHub\n"
-"  /gitstatus                     Show working tree & staged changes\n"
-"  /gitlog                        Show last 10 commit messages\n"
-"  /gitbranch                     List or switch branches\n"
-"  /gitignore add pattern         Add files or folders to .gitignore\n"
-"  /gitclean                      Remove cached junk (like __pycache__)\n"
-"  /gitfix                        Auto-repair repo (init / main / remote)\n"
-"  /gitdoctor                     Diagnose setup, token, and remote issues\n"
-"  /gitlfs setup                  Enable Git Large File Storage for big files\n\n"
-"────────────────────────────────────────────────────────\n\n"
-"💡 Examples\n"
-"  /qfind atlauncher servers\n"
-"  java change 17\n"
-"  java reload\n"
-"  backup '%USERPROFILE%/Downloads' to 'C:/Backups'\n\n"
-"Tips\n"
-"  • Chain with semicolons: batch on; create file 'a.txt' in '.' with text='hi'; zip '.'; batch off\n"
-"  • Paths can be relative to the current prompt directory."
-    ).strip()
+def show_help(topic: str | None = None) -> None:
+    """
+    Category-based help.
 
+    - `help`           -> show categories menu
+    - `help 3`         -> show a specific category
+    - `help macros`    -> same as `help 4`
+    - `help git`       -> git help
+    - `help all`       -> show all sections (long)
+    """
 
-    if RICH:
-        from rich.measure import Measurement
-        width = Measurement.get(console, console.options, content).maximum + 4
-        console.print(
-            Panel(
-                content,
-                title="HELP",
-                border_style="cyan",
-                padding=(0, 1),
-                expand=False,
-                width=width
-            )
-        )
+    def _panel(title: str, body: str) -> None:
+        if RICH:
+            console.print(Panel(body.rstrip("\n"), title=title, border_style="cyan"))
+        else:
+            print("\n" + "=" * 60)
+            print(title)
+            print("=" * 60)
+            print(body)
+
+    # ---------- Section texts ----------
+
+    sec1 = """
+Basics & navigation
+-------------------
+
+• `cd <path>`                 Change current folder (use quotes for paths with spaces)
+  Examples:
+    cd 'C:\\Users\\Wiggo\\Desktop'
+    cd ..                      (go up one folder)
+    cd                         (go to your home folder)
+
+• `ls` / `dir` / `list`       List files in current folder
+• `pwd` / `whereami`          Show current folder
+• `open .`                    Open current folder in your default editor / app
+• `explore .`                 Open File Explorer in current folder
+
+Tips:
+  - Use TAB completion in CMC when typing paths.
+  - You can drag–drop a folder into the terminal window to paste its path.
+"""
+
+    sec2 = """
+Files, folders & archives
+-------------------------
+
+• `read <file>`               Pretty-print text file (with colours when Rich is enabled)
+• `head <file>`               Show first lines of a file
+• `tail <file>`               Show last lines of a file
+
+• `create <file>`             Create an empty file (or overwrite) in current folder
+• `mkdir <folder>`            Create a new folder
+
+• `copy <src> <dst>`          Copy file or folder
+• `move <src> <dst>`          Move / rename file or folder
+• `rename <src> <dst>`        Rename (shortcut to move)
+
+• `delete <path>`             Delete file or folder
+    - In normal mode CMC asks for confirmation.
+    - In Batch mode it auto-confirms.
+    - In Dry-Run mode it only *shows* what would be deleted.
+
+• `zip <zipname> <path>`      Create a .zip from a file/folder
+• `unzip <zipfile> [target]`  Extract a .zip
+• `backup <src> [dest]`       Quick copy of a folder into a timestamped backup
+
+Examples:
+  create notes.txt
+  mkdir 'Project A'
+  copy notes.txt backup_notes.txt
+  zip project_backup.zip 'Project A'
+"""
+
+    sec3 = """
+Search & path index
+-------------------
+
+Quick search commands:
+
+• `find <pattern>`            Search filenames under current folder
+• `grep <text> [path]`        Search inside files for text
+
+Path index (q-commands):
+
+• `/qbuild`                   Scan important folders and build a quick path index
+• `/qfind <name>`             Fuzzy search in the quick index
+• `/qcount`                   Show how many entries are in the index
+
+Examples:
+  find server.properties
+  grep "Flask" .
+  /qbuild
+  /qfind test7
+"""
+
+    sec4 = """
+Macros (persistent)
+-------------------
+
+Macros let you save command sequences and run them later.
+
+• `macro add <name> = <commands>`
+      Define a macro.
+      Multiple commands are separated with `;`
+
+• `macro run <name>`
+      Execute the macro.
+
+• `macro list`
+      List all macros.
+
+• `macro delete <name>`
+      Delete one macro.
+
+• `macro clear`
+      Delete ALL macros (asks for confirmation).
+
+Available variables inside macros:
+  %DATE%   -> current date (YYYY-MM-DD)
+  %NOW%    -> current timestamp
+  %HOME%   -> your home folder
+
+Examples:
+  macro add publish = run 'C:\\path\\to\\build_script.py'; /gitupdate; /gitpush
+  macro run publish
+
+  macro add server = cd 'C:\\Servers\\MyPack'; start_server.bat
+"""
+
+    sec5 = """
+Aliases (lightweight shortcuts)
+-------------------------------
+
+Aliases are short names that expand to a single command line.
+
+• `alias add <name> = <command>`
+• `alias list`
+• `alias delete <name>`
+• `alias clear`
+
+Examples:
+  alias add cmc = cd 'C:\\Users\\Wiggo\\Desktop\\CMC'
+  alias add desk = cd 'C:\\Users\\Wiggo\\Desktop'
+
+Then you can type:
+  cmc
+  desk
+instead of the full `cd ...` lines.
+"""
+
+    sec6 = """
+Git & version control helpers
+-----------------------------
+
+Git setup:
+
+• `/gitsetup`                 Configure global username/email (guided)
+• `/gitlink`                  Link the current folder to a remote (GitHub etc.)
+• `/gitupdate`                Stage + commit with a smart default message
+
+Everyday git helpers (run inside a git repo):
+
+• `/gitstatus`                Show status (`git status`)
+• `/gitdiff`                  Show changes
+• `/gitlog`                   Show recent commits
+• `/gitpull`                  Pull latest changes
+• `/gitpush`                  Push to remote
+
+More tools:
+
+• `/gitignore add <pattern>`  Append patterns to .gitignore
+• `/gitclean`                 Safe clean: show what would be removed, then confirm
+• `/gitdoctor`                Small health-check for the repo
+
+Tip:
+  You can combine these with macros. Example:
+    macro add publish_public = /gitupdate; /gitpush
+"""
+
+    sec7 = """
+Java & Minecraft helpers
+------------------------
+
+Java:
+
+• `java list`                 List installed Java runtimes CMC knows about
+• `java version`              Show the currently active Java version
+• `java change <8|17|21>`     Switch between configured Java versions
+• `java reload`               Rescan Java installs (if you add/remove JDKs)
+
+Minecraft / general servers:
+
+Use `projectsetup` or `websetup` inside server folders to:
+  - Initialize git
+  - Generate basic start scripts (e.g. `start_server.bat`)
+  - Create README.md with notes about the server
+
+Example:
+  cd 'C:\\Users\\Wiggo\\AppData\\Roaming\\ATLauncher\\servers\\FireInThePipe2'
+  projectsetup
+  java change 8
+  start_server.bat
+"""
+
+    sec8 = """
+Automation helpers (run/sleep/sendkeys)
+---------------------------------------
+
+These are mostly for power users / macros.
+
+• `run '<path>' [in '<folder>']`
+      Run a script or executable with proper working directory.
+      Supports: .py, .bat, .cmd, .vbs, .exe
+
+  Examples:
+    run 'C:\\scripts\\cleanup.bat'
+    run 'LaunchServer.bat' in 'C:\\Servers\\MyPack'
+
+• `sleep <seconds>`
+      Pause between macro commands.
+      Example (inside macro):
+        macro add publish = /gitupdate; sleep 5; /gitpush
+
+• `sendkeys "<text>{ENTER}"`
+      Send keystrokes to the active window (use with care).
+      Example:
+        sendkeys "say Server restarting in 5 minutes{ENTER}"
+
+These are especially useful inside `macro add ...` definitions.
+"""
+
+    sec9 = """
+Web tools & downloads
+---------------------
+
+• `open <url or file>`
+      Open a URL in your default browser or a file in its default app.
+      Example:
+        open https://github.com
+
+• `download <url> [target_file]`
+      Download a single file (respects SSL on/off flag).
+
+• `download_list <txt_file>`
+      Download many URLs from a text file (one URL per line).
+      
+• youtube <query>
+    Open a YouTube search.
+    Example: youtube relaxing music
+    
+• search web <query>
+    Google search the web.
+    Example: search web how to center div
+
+• Flags affecting downloads:
+      ssl on/off  -> toggle certificate verification
+      dry-run on  -> show what would be downloaded, but don't actually do it
+"""
+
+    sec10 = """
+Project & web setup tools
+-------------------------
+
+General project setup:
+
+• `projectsetup`
+  - Detects project type (Python, Minecraft server, etc.)
+  - Can create venv + requirements.txt for Python projects
+  - Can initialize git for the folder
+  - Shows a before/after summary of what changed
+
+Web-specific setup:
+
+• `websetup`
+  - Detects static site / React / Vue / Svelte / Node / Express / Flask / FastAPI
+  - Offers to create .gitignore, README, basic scripts, etc.
+
+Full web app creator:
+
+• `webcreate`
+  Interactive wizard to scaffold a client + server app in one go.
+
+  - You choose:
+      - Project name
+      - Frontend: none / vanilla / react / vue / svelte
+      - Backend:  none / express / flask / fastapi
+  - CMC then:
+      - Creates `client/` and/or `server/` folders
+      - Runs the correct Node / Python tools
+      - Installs dependencies where possible
+      - Creates a `start_fullstack.bat` launcher that starts both sides
+
+Example:
+  webcreate
+    (answer prompts: frontend vue, backend flask, etc.)
+
+  Then later in that project:
+    start_fullstack.bat
+"""
+
+    sec11 = """
+Flags & modes
+-------------
+
+These change how CMC behaves:
+
+• `batch on/off`
+      Batch ON  -> auto-confirm destructive actions (no y/n questions)
+      Batch OFF -> always ask before delete / dangerous stuff
+
+• `dry-run on/off`
+      When ON, CMC prints what it *would* do, but does not actually run it.
+      Great for testing macros or deletes.
+
+• `ssl on/off`
+      Controls SSL verification for downloads.
+      - ON  -> strict SSL (default, safer)
+      - OFF -> allow self-signed / broken certs (use only if necessary)
+
+Current status is always shown in the header:
+  Batch: OFF | SSL: ON | Dry-Run: OFF
+"""
+
+    # Map of primary numeric sections
+    sections = {
+        "1": ("Basics & navigation", sec1),
+        "2": ("Files & folders", sec2),
+        "3": ("Search & path index", sec3),
+        "4": ("Macros", sec4),
+        "5": ("Aliases", sec5),
+        "6": ("Git helpers", sec6),
+        "7": ("Java & servers", sec7),
+        "8": ("Automation (run/sleep/sendkeys)", sec8),
+        "9": ("Web & downloads", sec9),
+        "10": ("Project & web setup", sec10),
+        "11": ("Flags & modes", sec11),
+    }
+
+    # Aliases (names -> numeric keys)
+    aliases = {
+        # 1
+        "basic": "1", "basics": "1", "nav": "1", "navigation": "1",
+        # 2
+        "file": "2", "files": "2", "folders": "2",
+        # 3
+        "search": "3", "find": "3", "path": "3", "qfind": "3",
+        # 4
+        "macro": "4", "macros": "4",
+        # 5
+        "alias": "5", "aliases": "5",
+        # 6
+        "git": "6",
+        # 7
+        "java": "7", "mc": "7", "minecraft": "7", "server": "7", "servers": "7",
+        # 8
+        "auto": "8", "automation": "8", "run": "8", "sendkeys": "8",
+        # 9
+        "web": "9", "download": "9", "downloads": "9",
+        # 10
+        "project": "10", "projects": "10", "websetup": "10", "webcreate": "10",
+        # 11
+        "flags": "11", "mode": "11", "modes": "11", "batch": "11", "dry-run": "11", "ssl": "11",
+    }
+
+    # ---------- No topic: show menu ----------
+    if not topic:
+        menu = """
+Type `help <number>` to open a section or use help all:
+
+  1. Basics & navigation
+  2. Files & folders
+  3. Search & path index
+  4. Macros
+  5. Aliases
+  6. Git helpers
+  7. Java & servers
+  8. Automation (run / sleep / sendkeys)
+  9. Web & downloads
+ 10. Project & web setup
+ 11. Flags & modes
+"""
+        _panel("CMC Help – categories", menu)
+        return
+
+    key = topic.strip().lower()
+
+    # Show everything
+    if key in ("all", "full", "everything"):
+        for num in sorted([int(k) for k in sections.keys()]):
+            k = str(num)
+            title, body = sections[k]
+            _panel(f"{k}. {title}", body)
+        return
+
+    # Resolve aliases
+    key = aliases.get(key, key)
+
+    if key in sections:
+        title, body = sections[key]
+        _panel(f"{key}. {title}", body)
     else:
-        print(content)
+        _panel(
+            "CMC Help",
+            f"Unknown help topic: {topic!r}\n\n"
+            "Type just `help` to see available categories."
+        )
+
 
 
 
@@ -2615,19 +4296,47 @@ def complete_path(text, state):
 def complete_command(text, state):
     """Autocomplete for commands, macros, git commands, and paths."""
     cmds = [
-        "pwd", "cd", "back", "home", "list", "info", "find", "findext",
-        "recent", "biggest", "search", "create file", "create folder",
-        "write", "read", "move", "copy", "rename", "delete", "zip",
-        "unzip", "open", "explore", "backup", "run", "download",
-        "downloadlist", "open url", "batch on", "batch off", "dry-run on",
-        "dry-run off", "ssl on", "ssl off", "status", "log", "undo",
-        "macro add", "macro run", "macro list", "macro delete", "macro clear",
-        "/gitsetup", "/gitlink", "/gitupdate", "/gitpull", "/gitstatus",
-        "/gitlog", "/gitbranch", "/gitignore add", "/gitclean", "/gitdoctor",
-        "/gitfix", "/gitlfs setup", "/qfind", "/qcount", "/qbuild",
-        "java list", "java version", "java change", "java reload",
-        "sleep", "sendkeys", "help", "exit"
-    ]
+    # Navigation / info
+    "pwd", "cd", "back", "home", "list", "info", "find", "findext",
+    "recent", "biggest", "search",
+
+    # File operations
+    "create file", "create folder", "write", "read", "move", "copy",
+    "rename", "delete", "zip", "unzip", "open", "explore", "backup",
+    "run",
+
+    # Internet
+    "download", "open url",
+    "search web", "youtube",
+
+    # Modes / safety
+    "batch on", "batch off", "dry-run on", "dry-run off",
+    "ssl on", "ssl off", "status", "log", "undo",
+
+    # Macros
+    "macro add", "macro run", "macro list", "macro delete", "macro clear",
+
+    # Git
+    "/gitsetup", "/gitlink", "/gitupdate", "/gitpull", "/gitstatus",
+    "/gitlog", "/gitbranch", "/gitignore add", "/gitclean", "/gitdoctor",
+    "/gitfix", "/gitlfs setup",
+
+    # Path index
+    "/qfind", "/qcount", "/qbuild",
+
+    # Java
+    "java list", "java version", "java change", "java reload",
+
+    # Automation
+    "sleep", "sendkeys",
+
+    # Web project tools
+    "webcreate", "websetup",
+
+    # Control
+    "help", "exit"
+]
+
     cmds += list(MACROS.keys())  # include macro names
 
     if text.startswith(("'", '"')):
@@ -2720,7 +4429,8 @@ def build_completer():
         "batch on", "batch off",
         "dry-run on", "dry-run off",
         "ssl on", "ssl off",
-        "sleep", "sendkeys"
+        "sleep", "sendkeys",
+        "webcreate", "websetup",
     ]
     cmds += base_cmds
 
