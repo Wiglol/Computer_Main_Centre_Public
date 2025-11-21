@@ -3267,14 +3267,20 @@ def handle_command(s: str):
             return
 
     # ---------- Alias Commands ----------
-    m = re.match(r"^alias\s+add\s+([A-Za-z0-9_\-]+)\s+(.+)$", s, re.I)
+    m = re.match(r"^alias\s+add\s+([A-Za-z0-9_\-]+)\s*(?:=\s*)?(.+)$", s, re.I)
     if m:
         name = m.group(1)
-        value = m.group(2)
+        value = m.group(2).strip()
+
+        # strip accidental leading '=' if user typed "name = command"
+        if value.startswith("="):
+            value = value[1:].strip()
+
         ALIASES[name] = value
         save_aliases()
         p(f"[cyan]Alias added:[/cyan] {name} → {value}")
         return
+
 
     m = re.match(r"^alias\s+delete\s+([A-Za-z0-9_\-]+)$", s, re.I)
     if m:
@@ -3820,7 +3826,7 @@ def show_help(topic: str | None = None) -> None:
             print(body)
 
     # ---------- Section texts ----------
-
+    
     sec1 = """
 Basics & navigation
 -------------------
@@ -3841,167 +3847,238 @@ Tips:
   - You can drag–drop a folder into the terminal window to paste its path.
 """
 
-    sec2 = """
-Files, folders & archives
--------------------------
+    sec2 = """[bold]2. Files & folders[/bold]
+--------------------------------
 
-• `read <file>`               Pretty-print text file (with colours when Rich is enabled)
-• `head <file>`               Show first lines of a file
-• `tail <file>`               Show last lines of a file
+Basic file viewing:
 
-• `create <file>`             Create an empty file (or overwrite) in current folder
-• `mkdir <folder>`            Create a new folder
+• `read <file>`                  
+  Pretty-print text file (with colours when Rich is enabled)
 
-• `copy <src> <dst>`          Copy file or folder
-• `move <src> <dst>`          Move / rename file or folder
-• `rename <src> <dst>`        Rename (shortcut to move)
+• `head <file>`                  
+  Show first lines of a file
 
-• `delete <path>`             Delete file or folder
-    - In normal mode CMC asks for confirmation.
-    - In Batch mode it auto-confirms.
-    - In Dry-Run mode it only *shows* what would be deleted.
+• `tail <file>`                  
+  Show last lines of a file
 
-• `zip <zipname> <path>`      Create a .zip from a file/folder
-• `unzip <zipfile> [target]`  Extract a .zip
-• `backup <src> [dest]`       Quick copy of a folder into a timestamped backup
 
-Examples:
-  create notes.txt
-  mkdir 'Project A'
-  copy notes.txt backup_notes.txt
-  zip project_backup.zip 'Project A'
+Creating files & folders:
+
+• `create file '<name>' in '<path>'`
+  Create a new empty file in the chosen folder
+
+  Example:
+      create file 'notes.txt' in '.'
+      create file 'todo.txt' in 'C:/Users/Public/Documents'
+
+• `create folder '<name>' in '<path>'`
+  Create a new folder inside the chosen path
+
+  Example:
+      create folder 'MyStuff' in '.'
+      create folder 'Projects' in 'C:/Users/Public'
+
+
+Moving, copying & renaming:
+
+• `copy <src> <dst>`             
+  Copy file or folder
+
+  Example:
+      copy 'file.txt' 'backup/file.txt'
+
+• `move <src> <dst>`             
+  Move / rename file or folder
+
+  Example:
+      move 'old.txt' 'new.txt'
+
+• `rename <src> <dst>`           
+  Shortcut for `move`
+
+
+Deleting:
+
+• `delete <path>`                
+  Delete file or folder  
+  – Normal mode: asks for confirmation  
+  – Batch mode: auto-confirms  
+  – Dry-Run mode: only *shows* what would be removed
+
+  Example:
+      delete 'temp.txt'
+      delete 'old_folder'
+
+
+Zip & unzip:
+
+• `zip <zipname> <path>`         
+  Create a .zip containing the given file/folder
+
+  Example:
+      zip 'backup.zip' 'MyFolder'
+
+• `unzip <zipfile> [target]`     
+  Extract .zip into optional target folder
+
+  Example:
+      unzip 'backup.zip'
+      unzip 'backup.zip' 'restore_here/'
+
+
+Opening:
+
+• `open <file>`                  
+  Open file with default Windows app
+
+  Example:
+      open 'report.pdf'
+
+• `explore <folder>`             
+  Open folder in Windows File Explorer
+
+  Example:
+      explore '.'
+
+
+Backup helper:
+
+• `backup <src> <dst>`           
+  Copy file/folder to a backup location
+
+  Example:
+      backup 'project' 'project_backup'
 """
 
-    sec3 = """
-Search & path index
--------------------
 
-Quick search commands:
+    sec3 = """[bold]3. Search & path index[/bold]
+--------------------------------
 
-• `find <pattern>`            Search filenames under current folder
-• `grep <text> [path]`        Search inside files for text
+Quick one-off search in current folder:
 
-Path index (q-commands):
+• `find <pattern>`               
+  Find files/folders whose name matches the pattern
 
-• `/qbuild`                   Scan important folders and build a quick path index
-• `/qfind <name>`             Fuzzy search in the quick index
-• `/qcount`                   Show how many entries are in the index
+• `findext <.ext>`               
+  List files with a specific extension
 
-Examples:
-  find server.properties
-  grep "Flask" .
-  /qbuild
-  /qfind test7
+• `recent`                       
+  Show recently modified files in current folder
+
+• `biggest`                      
+  Show biggest files in current folder
+
+Full machine-wide path index (fast after first build):
+
+• `/qbuild`                      
+  Scan your disks and build/update the quick path index
+
+• `/qfind <name>`                
+  Fuzzy-search indexed paths
+
+• `/qcount`                      
+  Show how many paths are currently indexed
+
+Text search inside files:
+
+• `search 'text'`                
+  Ask CMC to look for text using the quick path index helper
 """
 
-    sec4 = """
-Macros (persistent)
--------------------
 
-Macros let you save command sequences and run them later.
+    sec4 = """[bold]4. Macros[/bold]
+--------------------------------
+
+Macros (persistent multi-step automation sequences):
 
 • `macro add <name> = <commands>`
-      Define a macro.
-      Multiple commands are separated with `;`
+     Save a macro (use `;` to separate commands)
 
 • `macro run <name>`
-      Execute the macro.
+     Run a saved macro
 
 • `macro list`
-      List all macros.
+     Show all stored macros
 
 • `macro delete <name>`
-      Delete one macro.
+     Remove one macro
 
 • `macro clear`
-      Delete ALL macros (asks for confirmation).
+     Delete ALL macros
 
-Available variables inside macros:
-  %DATE%   -> current date (YYYY-MM-DD)
-  %NOW%    -> current timestamp
-  %HOME%   -> your home folder
+Variables available inside macros:
+  %DATE%, %NOW%, %HOME%
 
-Examples:
-  macro add publish = run 'C:\\path\\to\\build_script.py'; /gitupdate; /gitpush
-  macro run publish
-
-  macro add server = cd 'C:\\Servers\\MyPack'; start_server.bat
+Example:
+  macro add backup = zip 'project.zip' 'project'; upload; notify
 """
 
-    sec5 = """
-Aliases (lightweight shortcuts)
--------------------------------
+    sec5 = """[bold]5. Aliases[/bold]
+--------------------------------
 
-Aliases are short names that expand to a single command line.
+Aliases = one-line shortcuts to long commands.
 
 • `alias add <name> = <command>`
 • `alias list`
 • `alias delete <name>`
-• `alias clear`
 
 Examples:
-  alias add cmc = cd 'C:\\Users\\Wiggo\\Desktop\\CMC'
-  alias add desk = cd 'C:\\Users\\Wiggo\\Desktop'
-
-Then you can type:
-  cmc
-  desk
-instead of the full `cd ...` lines.
+  alias add desk = cd "%HOME%/Desktop"
+  alias add mc = cd "%HOME%/Games/Minecraft"
 """
 
-    sec6 = """
-Git & version control helpers
------------------------------
 
-Git setup:
+    sec6 = """[bold]6. Git helpers[/bold]
+--------------------------------
 
-• `/gitsetup`                 Configure global username/email (guided)
-• `/gitlink`                  Link the current folder to a remote (GitHub etc.)
-• `/gitupdate`                Stage + commit with a smart default message
+Git helper commands (wrapper for common tasks):
 
-Everyday git helpers (run inside a git repo):
-
-• `/gitstatus`                Show status (`git status`)
-• `/gitdiff`                  Show changes
-• `/gitlog`                   Show recent commits
-• `/gitpull`                  Pull latest changes
-• `/gitpush`                  Push to remote
-
-More tools:
-
-• `/gitignore add <pattern>`  Append patterns to .gitignore
-• `/gitclean`                 Safe clean: show what would be removed, then confirm
-• `/gitdoctor`                Small health-check for the repo
-
-Tip:
-  You can combine these with macros. Example:
-    macro add publish_public = /gitupdate; /gitpush
+• `/gitsetup`           Initialize a new Git repository
+• `/gitlink <url>`      Connect local repo to GitHub remote
+• `/gitupdate`          Stage & commit all changes
+• `/gitpull`            Pull latest changes from remote
+• `/gitstatus`          Show Git status
+• `/gitlog`             Show commit history
+• `/gitignore add <p>`  Append entries to .gitignore
+• `/gitclean`           Remove untracked files
+• `/gitdoctor`          Auto-fixes common Git problems
 """
 
-    sec7 = """
-Java & Minecraft helpers
-------------------------
+
+
+
+
+    sec7 = """[bold]7. Java & servers[/bold]
+-------------------------------
 
 Java:
 
-• `java list`                 List installed Java runtimes CMC knows about
-• `java version`              Show the currently active Java version
-• `java change <8|17|21>`     Switch between configured Java versions
-• `java reload`               Rescan Java installs (if you add/remove JDKs)
+• `java list`                    
+  List installed Java runtimes CMC knows about
+
+• `java version`                 
+  Show the currently active Java version
+
+• `java change <8|17|21>`        
+  Switch between configured Java versions
+
+• `java reload`                  
+  Rescan Java installs (if you add/remove JDKs)
 
 Minecraft / general servers:
 
 Use `projectsetup` or `websetup` inside server folders to:
-  - Initialize git
-  - Generate basic start scripts (e.g. `start_server.bat`)
-  - Create README.md with notes about the server
+  – Initialize git
+  – Generate basic start scripts (e.g. `start_server.bat`)
+  – Create README.md with notes about the server
 
 Example:
-  cd 'C:\\Users\\Wiggo\\AppData\\Roaming\\ATLauncher\\servers\\FireInThePipe2'
+  cd 'C:\\Path\\To\\ATLauncher\\servers\\FireInThePipe2'
   projectsetup
   java change 8
   start_server.bat
 """
+
 
     sec8 = """
 Automation helpers (run/sleep/sendkeys)
@@ -4021,6 +4098,9 @@ These are mostly for power users / macros.
       Pause between macro commands.
       Example (inside macro):
         macro add publish = /gitupdate; sleep 5; /gitpush
+        
+• `timer <seconds> [message]`    
+  Simple countdown that prints when time is up
 
 • `sendkeys "<text>{ENTER}"`
       Send keystrokes to the active window (use with care).
@@ -4519,4 +4599,4 @@ if __name__ == "__main__":
     main()
 
 
-# // test: autopublish propagation checksssss
+# // test: autopublish checksssss

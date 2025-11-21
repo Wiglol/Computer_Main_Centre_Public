@@ -32,7 +32,7 @@ pip install rich requests pyautogui prompt_toolkit
 
 ```bash
 create file 'test.txt' in '.' with text='Hello'
-create folder 'MyFolder' in 'C:/Users/Wiglo/Desktop'
+create folder 'MyFolder' in 'C:/Users/username/Desktop'
 read 'test.txt'
 delete 'test.txt'
 zip 'C:/Users/Wiglo/Desktop/MyFolder'
