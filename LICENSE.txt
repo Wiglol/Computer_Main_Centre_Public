@@ -1,16 +1,38 @@
-MIT License
+Copyright (c) 2025 Wiglo. All Rights Reserved.
 
-Copyright (c) 2025 Wiglo
+This software and all associated files, including source code, documentation, manuals, scripts, configuration files, installers, AI models, and any derivative materials (collectively, the “Software”), are the exclusive property of the copyright holder.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the “Software”), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, subject to the following conditions:
+1. Grant of Use
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+You are granted a non-exclusive, non-transferable license to use the Software for personal, non-commercial purposes only.
 
-THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+No other rights are granted unless explicitly stated in writing by the copyright holder.
+
+2. Restrictions
+
+Without written permission from the copyright holder, you may NOT:
+
+Copy, distribute, publish, or share the Software
+
+Modify, edit, or create derivative works
+
+Sell, rent, lease, sublicense, or commercialize the Software
+
+Upload or host the Software publicly (including GitHub or any repository)
+
+Use any part of the Software in your own applications or products
+
+Reverse-engineer, decompile, or attempt to extract any protected components
+
+Remove or alter copyright notices
+
+Any unauthorized use constitutes copyright infringement.
+
+3. Commercial Use
+
+Commercial use of any part of the Software—including bundling, reselling, paid services, or integration into commercial products—is strictly prohibited without a separate commercial license agreement signed by the copyright holder.
+
+4. Ownership
+
+All rights, title, and interest in the Software remain with the copyright holder.
+No rights or licenses are granted by implication, estoppel, or
