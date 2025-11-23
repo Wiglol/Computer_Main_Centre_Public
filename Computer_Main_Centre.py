@@ -123,6 +123,16 @@ try:
     HAVE_REQUESTS = True
 except Exception:
     pass
+    
+    
+# Embedded AI assistant (optional)
+HAVE_ASSISTANT = False
+try:
+    from assistant_core import run_ai_assistant
+    HAVE_ASSISTANT = True
+except Exception:
+    HAVE_ASSISTANT = False
+
 
 # ==========================================================
 # 🔧  Computer Main Centre – Auto-Setup & Dependency Checker
@@ -3051,6 +3061,34 @@ def handle_command(s: str):
     # Skip comment / empty lines
     if s.startswith("#"):
         return
+        
+    # ---------- Embedded AI assistant ----------
+    # Usage:
+    #   ai how do I back up my project?
+    #   ai "create a macro that zips this folder and runs /gitupdate"
+    if s.lower().startswith("ai "):
+        if not HAVE_ASSISTANT:
+            p("[yellow]⚠ AI assistant is not configured (assistant_core.py missing or Ollama not running).[/yellow]")
+            return
+
+        # Everything after "ai"
+        user_query = s[2:].strip()
+
+        # Strip matching outer quotes: ai "..." or ai '...'
+        if (user_query.startswith('"') and user_query.endswith('"')) or (
+            user_query.startswith("'") and user_query.endswith("'")
+        ):
+            user_query = user_query[1:-1].strip()
+
+        try:
+            from pathlib import Path as _Path
+            cwd_str = str(CWD if isinstance(CWD, _Path) else _Path.cwd())
+            # STATE and MACROS are the globals defined in CMC
+            reply_text = run_ai_assistant(user_query, cwd_str, STATE, MACROS)
+            p(reply_text)
+        except Exception as e:
+            p(f"[red]❌ AI assistant error:[/red] {e}")
+        return
 
 
         
@@ -4378,7 +4416,7 @@ def complete_command(text, state):
     cmds = [
     # Navigation / info
     "pwd", "cd", "back", "home", "list", "info", "find", "findext",
-    "recent", "biggest", "search",
+    "recent", "biggest", "search", "ai",
 
     # File operations
     "create file", "create folder", "write", "read", "move", "copy",
