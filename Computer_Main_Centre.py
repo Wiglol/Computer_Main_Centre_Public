@@ -3058,9 +3058,25 @@ def handle_command(s: str):
     if not s:
         return
 
-    # Skip comment / empty lines
+        # Skip comment / empty lines
     if s.startswith("#"):
         return
+
+    # ---------- Space (disk usage + AI cleanup) ----------
+    low = s.lower()
+    if low.startswith("space"):
+        try:
+            from CMC_Space import op_space
+            op_space(s, CWD, STATE, MACROS, p, RICH)
+        except Exception as e:
+            p(f"[red]Space command error:[/red] {e}" if RICH else f"Space command error: {e}")
+        return
+
+
+        
+        
+        
+    
         
     # ---------- Embedded AI assistant ----------
     # Usage:
@@ -3109,7 +3125,6 @@ def handle_command(s: str):
         except Exception as e:
             p(f"[red]❌ CMD command failed:[/red] {e}")
         return
-
 
 
 
@@ -3404,7 +3419,10 @@ def handle_command(s: str):
         except Exception as e:
             p(f"[red]Reload failed:[/red] {e}")
         return
-
+        
+        
+    
+  
 
          # ---------- Improved Java change ----------
     m = re.match(r"^java\s+change\s+(.+)$", s, re.I)
@@ -3848,10 +3866,10 @@ def show_help(topic: str | None = None) -> None:
     Category-based help.
 
     - `help`           -> show categories menu
-    - `help 3`         -> show a specific category
-    - `help macros`    -> same as `help 4`
+    - `help 4`         -> show Disk space & cleanup
+    - `help macros`    -> same as help 5
     - `help git`       -> git help
-    - `help all`       -> show all sections (long)
+    - `help all`       -> show everything
     """
 
     def _panel(title: str, body: str) -> None:
@@ -3864,379 +3882,216 @@ def show_help(topic: str | None = None) -> None:
             print(body)
 
     # ---------- Section texts ----------
-    
+
     sec1 = """
 Basics & navigation
 -------------------
 
-• `cd <path>`                 Change current folder (use quotes for paths with spaces)
-  Examples:
-    cd 'C:\\Users\\Wiggo\\Desktop'
-    cd ..                      (go up one folder)
-    cd                         (go to your home folder)
-
-• `ls` / `dir` / `list`       List files in current folder
-• `pwd` / `whereami`          Show current folder
-• `open .`                    Open current folder in your default editor / app
-• `explore .`                 Open File Explorer in current folder
+• `cd <path>`                     Change current folder
+• `ls` / `dir` / `list`           List files in the current directory
+• `pwd` / `whereami`              Show current folder
+• `open .`                        Open current folder in default editor/app
+• `explore .`                     Open current folder in Windows File Explorer
 
 Tips:
-  - Use TAB completion in CMC when typing paths.
-  - You can drag–drop a folder into the terminal window to paste its path.
+  - TAB completion works for paths.
+  - Drag–drop a folder into the terminal to paste its path.
 """
 
     sec2 = """[bold]2. Files & folders[/bold]
 --------------------------------
 
-Basic file viewing:
+Viewing:
 
-• `read <file>`                  
-  Pretty-print text file (with colours when Rich is enabled)
+• `read <file>`                   Pretty-print a text file
+• `head <file>`                   First lines
+• `tail <file>`                   Last lines
 
-• `head <file>`                  
-  Show first lines of a file
-
-• `tail <file>`                  
-  Show last lines of a file
-
-
-Creating files & folders:
+Creating:
 
 • `create file '<name>' in '<path>'`
-  Create a new empty file in the chosen folder
-
-  Example:
-      create file 'notes.txt' in '.'
-      create file 'todo.txt' in 'C:/Users/Public/Documents'
-
 • `create folder '<name>' in '<path>'`
-  Create a new folder inside the chosen path
 
-  Example:
-      create folder 'MyStuff' in '.'
-      create folder 'Projects' in 'C:/Users/Public'
+Copy / Move / Rename:
 
+• `copy <src> <dst>`
+• `move <src> <dst>`
+• `rename <src> <dst>`
 
-Moving, copying & renaming:
+Delete (safe by default):
 
-• `copy <src> <dst>`             
-  Copy file or folder
+• `delete <path>`                 Confirmation unless in Batch mode
 
-  Example:
-      copy 'file.txt' 'backup/file.txt'
+Zip tools:
 
-• `move <src> <dst>`             
-  Move / rename file or folder
+• `zip <zipname> <path>`
+• `unzip <zipfile> [target]`
 
-  Example:
-      move 'old.txt' 'new.txt'
+Open:
 
-• `rename <src> <dst>`           
-  Shortcut for `move`
-
-
-Deleting:
-
-• `delete <path>`                
-  Delete file or folder  
-  – Normal mode: asks for confirmation  
-  – Batch mode: auto-confirms  
-  – Dry-Run mode: only *shows* what would be removed
-
-  Example:
-      delete 'temp.txt'
-      delete 'old_folder'
-
-
-Zip & unzip:
-
-• `zip <zipname> <path>`         
-  Create a .zip containing the given file/folder
-
-  Example:
-      zip 'backup.zip' 'MyFolder'
-
-• `unzip <zipfile> [target]`     
-  Extract .zip into optional target folder
-
-  Example:
-      unzip 'backup.zip'
-      unzip 'backup.zip' 'restore_here/'
-
-
-Opening:
-
-• `open <file>`                  
-  Open file with default Windows app
-
-  Example:
-      open 'report.pdf'
-
-• `explore <folder>`             
-  Open folder in Windows File Explorer
-
-  Example:
-      explore '.'
-
+• `open '<file>'`
+• `explore '<folder>'`
 
 Backup helper:
 
-• `backup <src> <dst>`           
-  Copy file/folder to a backup location
-
-  Example:
-      backup 'project' 'project_backup'
+• `backup <src> <dst>`
 """
-
 
     sec3 = """[bold]3. Search & path index[/bold]
 --------------------------------
 
-Quick one-off search in current folder:
+Quick searches:
 
-• `find <pattern>`               
-  Find files/folders whose name matches the pattern
+• `find <pattern>`
+• `findext <.ext>`
+• `recent`
+• `biggest`
 
-• `findext <.ext>`               
-  List files with a specific extension
+Full-machine path index:
 
-• `recent`                       
-  Show recently modified files in current folder
+• `/qbuild`                       Build/update index
+• `/qfind <name>`                 Search indexed paths
+• `/qcount`                       Show number of indexed entries
 
-• `biggest`                      
-  Show biggest files in current folder
+Inside-file text search:
 
-Full machine-wide path index (fast after first build):
-
-• `/qbuild`                      
-  Scan your disks and build/update the quick path index
-
-• `/qfind <name>`                
-  Fuzzy-search indexed paths
-
-• `/qcount`                      
-  Show how many paths are currently indexed
-
-Text search inside files:
-
-• `search 'text'`                
-  Ask CMC to look for text using the quick path index helper
+• `search 'text'`
 """
 
-
-    sec4 = """[bold]4. Macros[/bold]
+    # NEW SECTION — DISK SPACE
+    sec4 = """[bold]4. Disk space & cleanup[/bold]
 --------------------------------
 
-Macros (persistent multi-step automation sequences):
+Analyze disk usage and optionally get AI-based cleanup suggestions.
+
+Basic usage:
+    space
+        Analyze current folder (default depth=2)
+
+    space '<path>'
+        Analyze a specific folder
+
+    space '<path>' depth <n>
+        Set scan depth (1–6)
+
+    space '<path>' depth <n> report
+        Also write CMC_space_report.txt in that folder
+
+During a scan, CMC will ask:
+
+    Run AI cleanup suggestions? (y/n)
+
+If confirmed:
+    - AI inspects folder sizes, large files, and junk patterns
+    - Suggests safe cleanup items (temp, logs, caches, downloads, etc.)
+
+Examples:
+    space
+    space 'C:/Users/Wiggo' depth 3
+    space 'C:/Users/Wiggo/Desktop' depth 4 report
+"""
+
+    sec5 = """[bold]5. Macros[/bold]
+--------------------------------
+
+Macros = persistent automation using `;` separators.
 
 • `macro add <name> = <commands>`
-     Save a macro (use `;` to separate commands)
-
 • `macro run <name>`
-     Run a saved macro
-
 • `macro list`
-     Show all stored macros
-
 • `macro delete <name>`
-     Remove one macro
-
 • `macro clear`
-     Delete ALL macros
 
-Variables available inside macros:
-  %DATE%, %NOW%, %HOME%
-
-Example:
-  macro add backup = zip 'project.zip' 'project'; upload; notify
+Vars:
+  %DATE%   current date
+  %NOW%    date+time
+  %HOME%   user home folder
 """
 
-    sec5 = """[bold]5. Aliases[/bold]
+    sec6 = """[bold]6. Aliases[/bold]
 --------------------------------
 
-Aliases = one-line shortcuts to long commands.
+Aliases = shortcuts to long commands.
 
 • `alias add <name> = <command>`
 • `alias list`
 • `alias delete <name>`
-
-Examples:
-  alias add desk = cd "%HOME%/Desktop"
-  alias add mc = cd "%HOME%/Games/Minecraft"
 """
 
-
-    sec6 = """[bold]6. Git helpers[/bold]
+    sec7 = """[bold]7. Git helpers[/bold]
 --------------------------------
 
-Git helper commands (wrapper for common tasks):
-
-• `/gitsetup`           Initialize a new Git repository
-• `/gitlink <url>`      Connect local repo to GitHub remote
-• `/gitupdate`          Stage & commit all changes
-• `/gitpull`            Pull latest changes from remote
-• `/gitstatus`          Show Git status
-• `/gitlog`             Show commit history
-• `/gitignore add <p>`  Append entries to .gitignore
-• `/gitclean`           Remove untracked files
-• `/gitdoctor`          Auto-fixes common Git problems
+• `/gitsetup`
+• `/gitlink <url>`
+• `/gitupdate`
+• `/gitpull`
+• `/gitstatus`
+• `/gitlog`
+• `/gitignore add <p>`
+• `/gitclean`
+• `/gitdoctor`
 """
 
-
-
-
-
-    sec7 = """[bold]7. Java & servers[/bold]
--------------------------------
+    sec8 = """[bold]8. Java & servers[/bold]
+--------------------------------
 
 Java:
+• `java list`
+• `java version`
+• `java change <8|17|21>`
+• `java reload`
 
-• `java list`                    
-  List installed Java runtimes CMC knows about
-
-• `java version`                 
-  Show the currently active Java version
-
-• `java change <8|17|21>`        
-  Switch between configured Java versions
-
-• `java reload`                  
-  Rescan Java installs (if you add/remove JDKs)
-
-Minecraft / general servers:
-
-Use `projectsetup` or `websetup` inside server folders to:
-  – Initialize git
-  – Generate basic start scripts (e.g. `start_server.bat`)
-  – Create README.md with notes about the server
-
-Example:
-  cd 'C:\\Path\\To\\ATLauncher\\servers\\FireInThePipe2'
-  projectsetup
-  java change 8
-  start_server.bat
-"""
-
-
-    sec8 = """
-Automation helpers (run/sleep/sendkeys)
----------------------------------------
-
-These are mostly for power users / macros.
-
-• `run '<path>' [in '<folder>']`
-      Run a script or executable with proper working directory.
-      Supports: .py, .bat, .cmd, .vbs, .exe
-
-  Examples:
-    run 'C:\\scripts\\cleanup.bat'
-    run 'LaunchServer.bat' in 'C:\\Servers\\MyPack'
-
-• `sleep <seconds>`
-      Pause between macro commands.
-      Example (inside macro):
-        macro add publish = /gitupdate; sleep 5; /gitpush
-        
-• `timer <seconds> [message]`    
-  Simple countdown that prints when time is up
-
-• `sendkeys "<text>{ENTER}"`
-      Send keystrokes to the active window (use with care).
-      Example:
-        sendkeys "say Server restarting in 5 minutes{ENTER}"
-
-These are especially useful inside `macro add ...` definitions.
+Minecraft / servers:
+• `projectsetup`
+• `websetup`
+• Generates scripts, sets up git, prepares server folders.
 """
 
     sec9 = """
-Web tools & downloads
----------------------
+[bold]9. Automation (run/sleep/sendkeys)[/bold]
+----------------------------------------------
 
-• `open <url or file>`
-      Open a URL in your default browser or a file in its default app.
-      Example:
-        open https://github.com
+• `run '<path>' [in '<folder>']`
+• `sleep <seconds>`
+• `timer <seconds> [message]`
+• `sendkeys "<text>{ENTER}"`
 
-• `download <url> [target_file]`
-      Download a single file (respects SSL on/off flag).
-
-• `download_list <txt_file>`
-      Download many URLs from a text file (one URL per line).
-      
-• youtube <query>
-    Open a YouTube search.
-    Example: youtube relaxing music
-    
-• search web <query>
-    Google search the web.
-    Example: search web how to center div
-
-• Flags affecting downloads:
-      ssl on/off  -> toggle certificate verification
-      dry-run on  -> show what would be downloaded, but don't actually do it
+Useful inside macros.
 """
 
     sec10 = """
-Project & web setup tools
--------------------------
+[bold]10. Web & downloads[/bold]
+--------------------------------
 
-General project setup:
+• `open <url>`
+• `download <url> [file]`
+• `download_list <txt>`
+• `youtube <query>`
+• `search web <query>`
 
-• `projectsetup`
-  - Detects project type (Python, Minecraft server, etc.)
-  - Can create venv + requirements.txt for Python projects
-  - Can initialize git for the folder
-  - Shows a before/after summary of what changed
-
-Web-specific setup:
-
-• `websetup`
-  - Detects static site / React / Vue / Svelte / Node / Express / Flask / FastAPI
-  - Offers to create .gitignore, README, basic scripts, etc.
-
-Full web app creator:
-
-• `webcreate`
-  Interactive wizard to scaffold a client + server app in one go.
-
-  - You choose:
-      - Project name
-      - Frontend: none / vanilla / react / vue / svelte
-      - Backend:  none / express / flask / fastapi
-  - CMC then:
-      - Creates `client/` and/or `server/` folders
-      - Runs the correct Node / Python tools
-      - Installs dependencies where possible
-      - Creates a `start_fullstack.bat` launcher that starts both sides
-
-Example:
-  webcreate
-    (answer prompts: frontend vue, backend flask, etc.)
-
-  Then later in that project:
-    start_fullstack.bat
+Flags:
+    ssl on/off
+    dry-run on/off
 """
 
     sec11 = """
-Flags & modes
--------------
+[bold]11. Project & web setup[/bold]
+------------------------------------
 
-These change how CMC behaves:
+• `projectsetup`                  Auto detect project type
+• `websetup`                      Framework detection
+• `webcreate`                     Full-stack scaffolding wizard
+"""
 
-• `batch on/off`
-      Batch ON  -> auto-confirm destructive actions (no y/n questions)
-      Batch OFF -> always ask before delete / dangerous stuff
+    sec12 = """
+[bold]12. Flags & modes[/bold]
+--------------------------------
 
-• `dry-run on/off`
-      When ON, CMC prints what it *would* do, but does not actually run it.
-      Great for testing macros or deletes.
+• `batch on/off`                  Auto-confirm dangerous actions
+• `dry-run on/off`                Simulation mode
+• `ssl on/off`                    SSL verification for downloads
 
-• `ssl on/off`
-      Controls SSL verification for downloads.
-      - ON  -> strict SSL (default, safer)
-      - OFF -> allow self-signed / broken certs (use only if necessary)
-
-Current status is always shown in the header:
+Status example:
   Batch: OFF | SSL: ON | Dry-Run: OFF
 """
 
@@ -4245,40 +4100,55 @@ Current status is always shown in the header:
         "1": ("Basics & navigation", sec1),
         "2": ("Files & folders", sec2),
         "3": ("Search & path index", sec3),
-        "4": ("Macros", sec4),
-        "5": ("Aliases", sec5),
-        "6": ("Git helpers", sec6),
-        "7": ("Java & servers", sec7),
-        "8": ("Automation (run/sleep/sendkeys)", sec8),
-        "9": ("Web & downloads", sec9),
-        "10": ("Project & web setup", sec10),
-        "11": ("Flags & modes", sec11),
+        "4": ("Disk space & cleanup", sec4),
+        "5": ("Macros", sec5),
+        "6": ("Aliases", sec6),
+        "7": ("Git helpers", sec7),
+        "8": ("Java & servers", sec8),
+        "9": ("Automation (run/sleep/sendkeys)", sec9),
+        "10": ("Web & downloads", sec10),
+        "11": ("Project & web setup", sec11),
+        "12": ("Flags & modes", sec12),
     }
 
     # Aliases (names -> numeric keys)
     aliases = {
         # 1
         "basic": "1", "basics": "1", "nav": "1", "navigation": "1",
+
         # 2
         "file": "2", "files": "2", "folders": "2",
+
         # 3
         "search": "3", "find": "3", "path": "3", "qfind": "3",
-        # 4
-        "macro": "4", "macros": "4",
+
+        # 4 — DISK SPACE
+        "space": "4", "disk": "4", "cleanup": "4",
+
         # 5
-        "alias": "5", "aliases": "5",
+        "macro": "5", "macros": "5",
+
         # 6
-        "git": "6",
+        "alias": "6", "aliases": "6",
+
         # 7
-        "java": "7", "mc": "7", "minecraft": "7", "server": "7", "servers": "7",
+        "git": "7",
+
         # 8
-        "auto": "8", "automation": "8", "run": "8", "sendkeys": "8",
+        "java": "8", "mc": "8", "minecraft": "8", "server": "8", "servers": "8",
+
         # 9
-        "web": "9", "download": "9", "downloads": "9",
+        "auto": "9", "automation": "9", "run": "9", "sendkeys": "9",
+
         # 10
-        "project": "10", "projects": "10", "websetup": "10", "webcreate": "10",
+        "web": "10", "download": "10", "downloads": "10",
+
         # 11
-        "flags": "11", "mode": "11", "modes": "11", "batch": "11", "dry-run": "11", "ssl": "11",
+        "project": "11", "websetup": "11", "webcreate": "11",
+
+        # 12
+        "flags": "12", "mode": "12", "modes": "12",
+        "batch": "12", "dry-run": "12", "ssl": "12",
     }
 
     # ---------- No topic: show menu ----------
@@ -4289,43 +4159,41 @@ Type `help <number>` to open a section or use help all:
   1. Basics & navigation
   2. Files & folders
   3. Search & path index
-  4. Macros
-  5. Aliases
-  6. Git helpers
-  7. Java & servers
-  8. Automation (run / sleep / sendkeys)
-  9. Web & downloads
- 10. Project & web setup
- 11. Flags & modes
+  4. Disk space & cleanup
+  5. Macros
+  6. Aliases
+  7. Git helpers
+  8. Java & servers
+  9. Automation (run / sleep / sendkeys)
+ 10. Web & downloads
+ 11. Project & web setup
+ 12. Flags & modes
 """
         _panel("CMC Help – categories", menu)
         return
 
+    # Resolve aliases
     key = topic.strip().lower()
+    key = aliases.get(key, key)
 
-    # Show everything
+    # Show all
     if key in ("all", "full", "everything"):
-        for num in sorted([int(k) for k in sections.keys()]):
+        for num in sorted([int(k) for k in sections]):
             k = str(num)
             title, body = sections[k]
             _panel(f"{k}. {title}", body)
         return
 
-    # Resolve aliases
-    key = aliases.get(key, key)
-
+    # Single section
     if key in sections:
         title, body = sections[key]
         _panel(f"{key}. {title}", body)
+
     else:
         _panel(
             "CMC Help",
-            f"Unknown help topic: {topic!r}\n\n"
-            "Type just `help` to see available categories."
+            f"Unknown help topic: {topic!r}\n\nType just `help` to see available categories."
         )
-
-
-
 
 
 
