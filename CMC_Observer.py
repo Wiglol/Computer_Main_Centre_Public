@@ -328,7 +328,7 @@ def observer_start(state: Dict[str, Any], p, port: int | None = None) -> None:
     obs["running"] = True
     obs["port"] = port
 
-    p(f"[green]Observer server started on[/green] http://127.0.0.1:{port}")
+    
 
 
 def observer_stop(state: Dict[str, Any], p) -> None:
