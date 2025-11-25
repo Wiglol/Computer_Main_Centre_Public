@@ -154,6 +154,31 @@ STATE = {
 }
 LOG = []    # list of strings
 
+
+# ---------- Config (persistent settings) ----------
+try:
+    from CMC_Config import load_config, save_config, apply_config_to_state
+except Exception:
+    load_config = save_config = apply_config_to_state = None  # type: ignore
+
+CONFIG = {}
+try:
+    if load_config is not None:
+        CONFIG = load_config(Path(__file__).parent)
+        apply_config_to_state(CONFIG, STATE)
+except Exception:
+    CONFIG = {}
+
+
+# Auto-start observer if configured
+try:
+    if CONFIG.get("observer", {}).get("auto"):
+        from CMC_Observer import observer_start
+        observer_start(STATE, p, port=CONFIG.get("observer", {}).get("port", 8765))
+except Exception:
+    pass
+
+
 # ---------- Java + Local Path Index Integration ----------
 
 JAVA_VERSIONS = {
@@ -3061,6 +3086,107 @@ def handle_command(s: str):
         # Skip comment / empty lines
     if s.startswith("#"):
         return
+        
+            # ---------- Config system ----------
+    low = s.lower()
+    if low.startswith("config"):
+        from CMC_Config import (
+            load_config,
+            save_config,
+            get_config_value,
+            set_config_value,
+            parse_value,
+            DEFAULT_CONFIG,
+        )
+        global CONFIG
+
+        parts = s.split()
+        # Just "config" or "config help"
+        if len(parts) == 1 or (len(parts) >= 2 and parts[1].lower() == "help"):
+            p(
+                "Config usage:\n"
+                "  config list\n"
+                "  config get <key>\n"
+                "  config set <key> <value>\n"
+                "  config reset\n\n"
+                "Examples:\n"
+                "  config set batch on\n"
+                "  config set observer.auto on\n"
+                "  config set space.default_depth 3\n"
+            )
+            return
+
+        cmd = parts[1].lower()
+
+        # config list
+        if cmd == "list":
+            import json as _json
+            try:
+                txt = _json.dumps(CONFIG or {}, indent=2, sort_keys=True)
+                p(txt)
+            except Exception:
+                p(CONFIG)
+            return
+
+        # config reset
+        if cmd == "reset":
+            CONFIG = dict(DEFAULT_CONFIG)
+            apply_config_to_state(CONFIG, STATE)
+            save_config(CONFIG, Path(__file__).parent)
+            p("[green]Config reset to defaults.[/green]")
+            return
+
+        # config get <key>
+        if cmd == "get" and len(parts) >= 3:
+            key = parts[2]
+            from CMC_Config import get_config_value
+            val = get_config_value(CONFIG, key, default=None)
+            p(f"{key} = {val!r}")
+            return
+
+        # config set <key> <value...>
+        if cmd == "set" and len(parts) >= 4:
+            key = parts[2]
+            raw_value = " ".join(parts[3:])
+            value = parse_value(raw_value)
+            CONFIG = set_config_value(CONFIG, key, value)
+            # Apply top-level flags immediately
+            apply_config_to_state(CONFIG, STATE)
+            save_config(CONFIG, Path(__file__).parent)
+            p(f"[green]Config updated:[/green] {key} = {value!r}")
+            return
+
+        p(f"[red]Unknown config command:[/red] {' '.join(parts[1:])}")
+        return
+
+        
+           # ---------- Observer (read-only HTTP API) ----------
+    if low.startswith("observer"):
+        from CMC_Observer import observer_start, observer_stop, observer_status
+        parts = s.split()
+        sub = parts[1].lower() if len(parts) >= 2 else "status"
+
+        if sub == "start":
+            port = None
+            if len(parts) >= 3:
+                try:
+                    port = int(parts[2])
+                except Exception:
+                    port = None
+            observer_start(STATE, p, port=port)
+            return
+
+        if sub == "stop":
+            observer_stop(STATE, p)
+            return
+
+        if sub == "status":
+            observer_status(STATE, p)
+            return
+
+        p(f"[red]Unknown observer command:[/red] {' '.join(parts[1:])}")
+        return
+  
 
     # ---------- Space (disk usage + AI cleanup) ----------
     low = s.lower()
@@ -3074,37 +3200,33 @@ def handle_command(s: str):
 
 
         
-        
-        
-    
-        
-    # ---------- Embedded AI assistant ----------
+     # ---------- Embedded AI assistant ----------
     # Usage:
     #   ai how do I back up my project?
-    #   ai "create a macro that zips this folder and runs /gitupdate"
+    #   ai "create a macro that zips this folder"
     if s.lower().startswith("ai "):
         if not HAVE_ASSISTANT:
             p("[yellow]⚠ AI assistant is not configured (assistant_core.py missing or Ollama not running).[/yellow]")
             return
 
-        # Everything after "ai"
-        user_query = s[2:].strip()
+        # Everything after "ai "
+        user_query = s[3:].strip()
 
-        # Strip matching outer quotes: ai "..." or ai '...'
+        # Strip matching outer quotes
         if (user_query.startswith('"') and user_query.endswith('"')) or (
             user_query.startswith("'") and user_query.endswith("'")
         ):
             user_query = user_query[1:-1].strip()
 
         try:
-            from pathlib import Path as _Path
-            cwd_str = str(CWD if isinstance(CWD, _Path) else _Path.cwd())
-            # STATE and MACROS are the globals defined in CMC
+            cwd_str = str(CWD)
             reply_text = run_ai_assistant(user_query, cwd_str, STATE, MACROS)
             p(reply_text)
         except Exception as e:
             p(f"[red]❌ AI assistant error:[/red] {e}")
         return
+
+
 
 
         
