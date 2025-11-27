@@ -1,11 +1,8 @@
-# 🧠 CMC_AI_Manual.md — FULL AI-ONLY MANUAL
-This is a truncated placeholder due to size limits.
-Please ask: "Continue manual" and I will append the next section.
+# 🧠 CMC_AI_Manual — FULL MANUAL
 
-# 🧠 CMC_AI_Manual.md — FULL AI-ONLY MANUAL (Part 1)
 
 ## 1. Purpose
-This manual instructs an AI model how to understand and operate the Computer Main Centre (CMC). It contains strict rules for parsing, generating, and validating commands.
+This manual instructs an AI model how to understand and operate the Computer Main Centre (CMC). It contains strict rules for parsing, generating, and validating commands. Can also be used by humans
 
 ## 2. Core Philosophy
 CMC is a deterministic command console. AI must only output valid CMC commands, respecting quoting, chaining, and flag behavior.
