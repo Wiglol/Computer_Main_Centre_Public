@@ -193,7 +193,11 @@ class ObserverHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
-        self.wfile.write(payload)
+        try:
+            self.wfile.write(payload)
+        except Exception:
+            # ignore broken pipe errors
+            pass
 
     def do_GET(self) -> None:  # type: ignore[override]
         try:
@@ -201,64 +205,63 @@ class ObserverHandler(BaseHTTPRequestHandler):
             qs = parse_qs(parsed.query)
             path = parsed.path
 
+            # ---------------------- DRIVES ----------------------
             if path == "/drives":
                 return self._send_json({"drives": _list_drives()})
 
+            # ---------------------- LS --------------------------
             if path == "/ls":
-                raw = qs.get("path", [str(Path.home())])[0]
+                raw = qs.get("path", ["C:/"])[0]
                 p = _safe_path(raw)
                 return self._send_json(_dir_listing(p))
 
+            # ---------------------- STAT ------------------------
             if path == "/stat":
-                raw = qs.get("path", [str(Path.home())])[0]
+                raw = qs.get("path", ["C:/"])[0]
                 p = _safe_path(raw)
                 return self._send_json(_stat_path(p))
 
+            # ---------------------- TREE ------------------------
             if path == "/tree":
-                raw = qs.get("path", [str(Path.home())])[0]
+                raw = qs.get("path", ["C:/"])[0]
                 depth = 2
                 if "depth" in qs:
                     try:
                         depth = int(qs["depth"][0])
-                    except Exception:
+                    except:
                         pass
-                if depth < 1:
-                    depth = 1
-                if depth > 5:
-                    depth = 5
+                depth = max(1, min(5, depth))
                 p = _safe_path(raw)
                 return self._send_json(_tree(p, depth=depth))
 
-            # ---------- UPDATED FIND (Full-drive scanning) ----------
+            # ---------------------- FIND ------------------------
             if path == "/find":
                 name = qs.get("name", ["*"])[0]
 
-                # Determine search roots
+                # Default root = C:/ only
                 if "root" in qs:
                     roots = [qs["root"][0]]
                 else:
-                    roots = []
-                    if os.name == "nt":
-                        import string
-                        for letter in string.ascii_uppercase:
-                            drive = f"{letter}:\\"
-                            if os.path.exists(drive):
-                                roots.append(drive)
-                    else:
-                        roots = ["/"]
+                    roots = ["C:/"]
 
                 max_results = 200
                 if "max" in qs:
                     try:
                         max_results = max(1, min(5000, int(qs["max"][0])))
-                    except Exception:
+                    except:
                         pass
 
                 all_results = []
+
                 for r in roots:
                     try:
                         root = _safe_path(r)
                         results = _find(root, name, max_results=max_results)
+
+                        # Apply 15-result safety cap PER ROOT
+                        if len(results) > 15:
+                            results = results[:15]
+
                     except Exception:
                         continue
 
@@ -266,29 +269,41 @@ class ObserverHandler(BaseHTTPRequestHandler):
                         all_results.append(item)
                         if len(all_results) >= max_results:
                             break
+
                     if len(all_results) >= max_results:
                         break
 
-                return self._send_json({
-                    "roots_searched": roots,
-                    "pattern": name,
-                    "results": all_results,
-                })
+                # Final global limit (absolute max 15)
+                if len(all_results) > 15:
+                    all_results = all_results[:15]
 
-            # ---------- Unknown endpoint ----------
-            return self._send_json(
-                {
-                    "error": "unknown_endpoint",
-                    "endpoints": ["/drives", "/ls", "/stat", "/tree", "/find"],
-                },
-                status=404,
-            )
+                # SAFE JSON SEND
+                try:
+                    return self._send_json({
+                        "roots_searched": roots,
+                        "pattern": name,
+                        "results": all_results,
+                        "limited": True
+                    })
+                except Exception as e:
+                    return self._send_json({
+                        "error": "send_failed",
+                        "detail": str(e),
+                        "note": "JSON was trimmed to avoid socket abort."
+                    }, status=500)
+
+            # ---------------------- UNKNOWN ENDPOINT ------------
+            return self._send_json({
+                "error": "unknown_endpoint",
+                "endpoints": ["/drives", "/ls", "/stat", "/tree", "/find"]
+            }, status=404)
 
         except Exception as e:
             return self._send_json({"error": "internal_error", "detail": str(e)}, status=500)
 
     def log_message(self, fmt: str, *args: Any) -> None:
         return
+
 
 
 

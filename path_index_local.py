@@ -1,227 +1,280 @@
-import os, sys, json, time, sqlite3, argparse
+import os
+import time
+import sqlite3
+import difflib
+import re
 from pathlib import Path
-import getpass
+from typing import List, Dict, Any
 
-# ---------- Dynamic default DB path ----------
-def get_default_db():
+# ---------- Database location ----------
+def get_default_db() -> Path:
+    """Store the index DB next to this script, in CentreIndex/paths.db."""
+    here = Path(__file__).resolve().parent
+    db_folder = here / "CentreIndex"
+    db_folder.mkdir(parents=True, exist_ok=True)
+    return db_folder / "paths.db"
+
+DEFAULT_DB: Path = get_default_db()
+
+# ---------- SQLite helpers ----------
+def connect(db: Path) -> sqlite3.Connection:
+    return sqlite3.connect(str(db))
+
+def ensure_schema(con: sqlite3.Connection) -> bool:
+    cur = con.cursor()
+    cur.execute("CREATE TABLE IF NOT EXISTS paths(path TEXT PRIMARY KEY);")
+    has_fts = False
     try:
-        user = getpass.getuser()  # works everywhere (no hardcoded name)
-        base = Path.home() / "CentreIndex"
-        base.mkdir(parents=True, exist_ok=True)
-        return base / "paths.db"
+        cur.execute("CREATE VIRTUAL TABLE IF NOT EXISTS paths_fts USING fts5(path, content='');")
+        has_fts = True
     except Exception:
-        # fallback if home() fails
-        return Path(os.getcwd()) / "paths.db"
+        has_fts = False
+    con.commit()
+    return has_fts
 
-DEFAULT_DB = get_default_db()
-# ---------------------------------------------
-
-def norm(p: str) -> str:
-    return str(p).replace("\\", "/").strip()
-
-def ensure_parent(path: Path):
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-def connect(db_path: Path):
-    ensure_parent(db_path)
-    con = sqlite3.connect(str(db_path))
-    con.execute("PRAGMA journal_mode=WAL;")
-    con.execute("PRAGMA synchronous=NORMAL;")
-    con.execute("PRAGMA temp_store=MEMORY;")
-    con.execute("PRAGMA mmap_size=30000000000;")
-    return con
-
-def ensure_schema(con: sqlite3.Connection):
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS paths(
-            id INTEGER PRIMARY KEY,
-            path TEXT NOT NULL UNIQUE
-        );
-    """)
-    # Try to create FTS5 (best-effort). If unavailable, we'll fall back to LIKE.
-    try:
-        con.execute("CREATE VIRTUAL TABLE IF NOT EXISTS paths_fts USING fts5(path, content='');")
-        con.execute("CREATE INDEX IF NOT EXISTS idx_paths_path ON paths(path);")
-        con.commit()
-        return True
-    except sqlite3.OperationalError:
-        con.execute("CREATE INDEX IF NOT EXISTS idx_paths_path ON paths(path);")
-        con.commit()
-        return False
-
-def rebuild_index(db: Path, targets: list[str]):
+# ---------- Index building ----------
+def rebuild_index(db: Path, targets: List[str]) -> None:
+    """Full rebuild of the path index for the given drive letters (e.g. ['C','E','F'])."""
     start = time.time()
     con = connect(db)
     has_fts = ensure_schema(con)
     cur = con.cursor()
 
-    # Clear old data (safe and simple)
+    # Clear main table
     cur.execute("DELETE FROM paths;")
+
+    # Recreate FTS table safely (contentless FTS5 cannot be DELETEd)
     if has_fts:
-        cur.execute("DELETE FROM paths_fts;")
+        try:
+            cur.execute("DROP TABLE IF EXISTS paths_fts;")
+            cur.execute("CREATE VIRTUAL TABLE paths_fts USING fts5(path, content='');")
+        except Exception as e:
+            print("[WARN] Could not recreate FTS table:", e)
+
     con.commit()
 
     total = 0
-    def add_batch(batch):
+
+    def add_batch(batch: List[str]) -> None:
         nonlocal total
-        if not batch: return
-        cur.executemany("INSERT OR IGNORE INTO paths(path) VALUES (?);", ((p,) for p in batch))
+        if not batch:
+            return
+        cur.executemany(
+            "INSERT OR IGNORE INTO paths(path) VALUES (?);",
+            ((p,) for p in batch)
+        )
         if has_fts:
-            cur.executemany("INSERT INTO paths_fts(path) VALUES (?);", ((p,) for p in batch))
+            cur.executemany(
+                "INSERT INTO paths_fts(path) VALUES (?);",
+                ((p,) for p in batch)
+            )
         total += len(batch)
 
-    # Expand targets (drives or folders)
-    norm_targets = []
-    for t in targets:
-        t = t.strip()
-        if not t: continue
-        # Allow "C" or "C:" or "C:/"
-        if len(t) == 1 and t.isalpha():
-            base = Path(t + ":/")  # C:/
-        else:
-            base = Path(t)
-            # If "C:" given, make it "C:/"
-            if base.drive and str(base) == base.drive:
-                base = Path(base.drive + "/")
-        norm_targets.append(base)
+    # Scan each target drive (e.g. 'C','E','F')
+    for tgt in targets:
+        drive = tgt.rstrip(":/\\").strip()
+        if not drive:
+            continue
+        root = Path(f"{drive}:/")
+        print(f"[SCAN] {root}")
+        if not root.exists():
+            print(f"[WARN] Drive not found: {root}")
+            continue
 
-    print("[INDEX] Starting fresh scan…")
-    BATCH = 2000
-    for base in norm_targets:
-        print(f"[SCAN] {base}")
+        batch: List[str] = []
         try:
-            if not base.exists():
-                print(f"[WARN] {base} does not exist or is not accessible.")
-                continue
-            batch = []
-            # Use rglob; ignore permission errors by try/except on each iteration
-            it = base.rglob("*")
-            for p in it:
+            for path in root.rglob("*"):
                 try:
-                    batch.append(norm(str(p)))
-                    if len(batch) >= BATCH:
-                        add_batch(batch); con.commit(); batch.clear()
+                    p_str = str(path)
+                    batch.append(p_str)
+                    if len(batch) >= 5000:
+                        add_batch(batch)
+                        batch = []
                 except Exception:
-                    # Skip unreadable entries
                     continue
-            if batch:
-                add_batch(batch); con.commit(); batch.clear()
-        except Exception as e:
-            print(f"[WARN] {base}: {e}")
+        except Exception:
+            # rglob can fail on some protected areas; just skip
+            continue
+
+        if batch:
+            add_batch(batch)
+            batch = []
 
     con.commit()
-    dur = time.time() - start
-    print(f"[BUILD] Indexed ~{total:,} paths in {dur:.1f}s → {db}")
     con.close()
 
-def count_paths(db: Path) -> int:
-    con = connect(db)
-    try:
-        (n,) = con.execute("SELECT COUNT(*) FROM paths;").fetchone()
-        return int(n)
-    finally:
-        con.close()
+    elapsed = time.time() - start
+    print(f"[BUILD] Indexed ~{total:,} paths in {elapsed:.1f}s → {db}")
 
-def query_paths(db: Path, q: str, limit: int = 50) -> list[tuple[str,int]]:
+# Backwards-compatible wrapper for older CMC code
+def quick_build(targets: List[str]) -> None:
+    """Compatibility function used by /qbuild in the main script."""
+    rebuild_index(DEFAULT_DB, targets)
+
+# ---------- Query helpers ----------
+def _tokenize_query(q: str) -> List[str]:
+    return [t.strip().lower() for t in q.replace("\n", " ").split() if t.strip()]
+
+_SYNONYMS: Dict[str, List[str]] = {
+    "server": ["servers", "srv", "instance", "world"],
+    "servers": ["server", "srv", "instance", "world"],
+    "atlauncher": ["atlauncher", "launcher"],
+}
+
+def _expand_terms(terms: List[str]) -> List[str]:
+    out: List[str] = []
+    seen = set()
+    for t in terms:
+        if t not in seen:
+            seen.add(t)
+            out.append(t)
+        for syn in _SYNONYMS.get(t, []):
+            if syn not in seen:
+                seen.add(syn)
+                out.append(syn)
+    return out
+
+def _path_tokens(plow: str) -> List[str]:
+    """Split a path into coarse tokens for fuzzy presence checks."""
+    return [tok for tok in re.split(r"[\\/._\-\s]+", plow) if tok]
+
+# ---------- Advanced fuzzy search ----------
+def advanced_query_paths(db: Path, q: str, limit: int = 50) -> List[Dict[str, Any]]:
     """
-    Multi-word search:
-      - "abc def" => path must contain "abc" AND "def" (case-insensitive)
-      - If too few hits, relax to OR (any term) to fill up to limit
-    Returns list of (path, score).
+    Advanced ranked search over the path index.
+
+    Features:
+      - multi-word AND logic on the original core terms
+      - fuzzy presence detection against path segments
+      - synonym expansion (server/servers/srv/etc.)
+      - fuzzy scoring on basename + full path
+    Returns: list of {path, score}.
     """
+    terms = _tokenize_query(q)
+    if not terms:
+        return []
+
+    core_terms = terms[:]        # original query terms
+    expanded = _expand_terms(terms)
+
     con = connect(db)
-    try:
-        terms = [t.strip().lower() for t in q.split() if t.strip()]
-        if not terms:
-            return []
+    cur = con.cursor()
 
-        # AND match (strict)
-        and_sql = " AND ".join(["LOWER(path) LIKE ?"] * len(terms))
-        and_params = [f"%{t}%" for t in terms]
-        rows = con.execute(
-            f"SELECT path FROM paths WHERE {and_sql} LIMIT ?;",
-            (*and_params, limit)
-        ).fetchall()
-        out = [(r[0], 100) for r in rows]
+    candidate_max = max(limit * 80, 2000)
+    candidates: List[str] = []
 
-        # If not enough, fill with OR match (but don’t duplicate)
-        if len(out) < limit and len(terms) > 1:
-            or_sql = " OR ".join(["LOWER(path) LIKE ?"] * len(terms))
-            or_params = [f"%{t}%" for t in terms]
-            rows2 = con.execute(
-                f"SELECT path FROM paths WHERE {or_sql} LIMIT ?;",
-                (*or_params, limit)
-            ).fetchall()
-            seen = {p for (p, _) in out}
-            for (p,) in rows2:
+    # 1) Primary candidate set: AND over core terms (substring LIKE)
+    if core_terms:
+        and_sql = " AND ".join(["LOWER(path) LIKE ?"] * len(core_terms))
+        and_params = [f"%{t}%" for t in core_terms]
+        try:
+            cur.execute(
+                f"SELECT path FROM paths WHERE {and_sql} LIMIT ?;",
+                (*and_params, candidate_max)
+            )
+            candidates = [row[0] for row in cur.fetchall()]
+        except Exception:
+            candidates = []
+
+    # 2) Fallback OR set if we didn't get enough AND matches
+    if len(candidates) < limit:
+        like_terms: List[str] = []
+        for t in expanded:
+            if t not in like_terms:
+                like_terms.append(t)
+            if len(t) >= 3:
+                short = t[:3]
+                if short not in like_terms:
+                    like_terms.append(short)
+
+        if like_terms:
+            or_sql = " OR ".join(["LOWER(path) LIKE ?"] * len(like_terms))
+            or_params = [f"%{t}%" for t in like_terms]
+            try:
+                cur.execute(
+                    f"SELECT path FROM paths WHERE {or_sql} LIMIT ?;",
+                    (*or_params, candidate_max)
+                )
+                extra = [row[0] for row in cur.fetchall()]
+            except Exception:
+                extra = []
+
+            seen = set(candidates)
+            for p in extra:
                 if p not in seen:
-                    out.append((p, 90))
                     seen.add(p)
-                if len(out) >= limit:
-                    break
+                    candidates.append(p)
 
-        return out[:limit]
-    finally:
-        con.close()
+    con.close()
 
+    # Deduplicate
+    seen2 = set()
+    unique_candidates: List[str] = []
+    for p in candidates:
+        if p not in seen2:
+            seen2.add(p)
+            unique_candidates.append(p)
 
-def main():
-    parser = argparse.ArgumentParser(description="Local Path Index (no server)")
-    parser.add_argument("--db", default=str(DEFAULT_DB), help="Path to SQLite DB")
-    parser.add_argument("--build", help="Comma-separated list of drives/folders (e.g. C,E,F or C:/Users/Wiggo,C,E,F)")
-    parser.add_argument("--count", action="store_true", help="Print number of indexed paths")
-    parser.add_argument("--query", help="Search term to find paths")
-    parser.add_argument("--limit", type=int, default=15)
-    args = parser.parse_args()
+    results: List[Dict[str, Any]] = []
 
-    db = Path(args.db)
+    for p in unique_candidates:
+        plow = p.lower()
+        basename = os.path.basename(p).lower()
+        tokens = _path_tokens(plow)
 
-    if args.build:
-        targets = [x.strip() for x in args.build.split(",") if x.strip()]
-        rebuild_index(db, targets)
-        return
+        # ---- multi-term presence detection against segments ----
+        contains_core: List[str] = []
+        for t in core_terms:
+            present = False
+            if t in plow:
+                present = True
+            else:
+                for tok in tokens:
+                    if difflib.SequenceMatcher(None, t, tok).ratio() * 100 >= 70:
+                        present = True
+                        break
+            if present:
+                contains_core.append(t)
 
-    if args.count:
-        print(count_paths(db))
-        return
+        contains_all_core = len(contains_core) >= len(core_terms) if core_terms else True
 
-    if args.query is not None:
-        results = query_paths(db, args.query, args.limit)
-        # Print JSON for easy consumption by other tools
-        print(json.dumps([{"path": p, "score": s} for (p, s) in results], ensure_ascii=False))
-        return
+        base_score = 0.0
 
-if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        print("⚠️ Error:", e)
-        import traceback
-        traceback.print_exc()
-        input("\nPress Enter to exit...")
+        # Strong AND logic: heavily reward matches that satisfy all core terms,
+        # and strongly penalize those that miss terms when there are multiple.
+        if len(core_terms) > 1:
+            if contains_all_core:
+                base_score += 140.0
+            else:
+                missing = len(core_terms) - len(contains_core)
+                base_score -= missing * 90.0
+        else:
+            if contains_all_core:
+                base_score += 40.0
 
-# ---------- CMC compatibility wrappers ----------
-from pathlib import Path as _P
+        base_score += 15.0 * len(contains_core)
 
-def quick_build(targets: str = None):
-    """Bridge for /qbuild — uses the SQLite rebuild_index logic."""
-    if targets:
-        items = [x.strip() for x in targets.split() if x.strip()]
-    else:
-        items = ["C", "D", "E", "F"]
-    rebuild_index(DEFAULT_DB, items)
+        # Fuzzy scoring using both basename and full path
+        fuzzy_scores: List[float] = []
+        for t in expanded:
+            s1 = difflib.SequenceMatcher(None, t, basename).ratio() * 100.0
+            s2 = difflib.SequenceMatcher(None, t, plow).ratio() * 100.0
+            fuzzy_scores.append(max(s1, s2))
 
-def quick_count():
-    """Bridge for /qcount."""
-    return count_paths(DEFAULT_DB)
+        fmax = max(fuzzy_scores) if fuzzy_scores else 0.0
+        favg = sum(fuzzy_scores) / len(fuzzy_scores) if fuzzy_scores else 0.0
 
-def quick_find(terms: str, limit: int = 20):
-    """Bridge for /qfind — returns list of plain paths."""
-    out = query_paths(DEFAULT_DB, terms, limit)
-    return [p for (p, _) in out]
+        base_score += 0.4 * fmax + 0.2 * favg
 
+        results.append({
+            "path": p,
+            "score": int(round(base_score)),
+        })
 
+    # Rank by score, then shorter path as tie-breaker
+    results.sort(key=lambda r: (-r["score"], len(r["path"])))
+    return results[:limit]
 
-
-
-
+def super_find(q: str, limit: int = 20) -> List[Dict[str, Any]]:
+    """Main entry for CMC /find: advanced fuzzy multi-word search."""
+    return advanced_query_paths(DEFAULT_DB, q, limit)

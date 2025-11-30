@@ -25,6 +25,12 @@ from typing import Any, Dict, List, Optional
 _MANUAL_CACHE: Optional[str] = None
 
 
+
+def clear_manual_cache():
+    global _MANUAL_CACHE
+    _MANUAL_CACHE = None
+
+
 def _default_manual_path() -> Path:
     """Return default path to the full CMC AI manual."""
     env = os.getenv("CMC_AI_MANUAL")
@@ -45,7 +51,7 @@ def load_cmc_manual(path: Optional[Path | str] = None) -> str:
     if _MANUAL_CACHE is not None:
         return _MANUAL_CACHE
 
-    manual_path = Path(path) if path is not None else _default_manual_path()
+    manual_path = Path(path) if path is not None else _active_manual_path()
     try:
         _MANUAL_CACHE = manual_path.read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -88,54 +94,101 @@ def build_system_prompt(cwd: str, state: Dict[str, Any], macros: Dict[str, str])
     Build the full system prompt used for each AI call.
 
     This combines:
-      - short identity + behaviour rules
+      - strict identity + behaviour rules (high priority)
       - observer usage rules
-      - current high‑level CMC context
-      - the full CMC AI manual (ground truth)
+      - current high-level CMC context
+      - the CMC AI manual (big or mini, depending on model)
     """
     ctx = build_context_blob(cwd, state, macros)
-    manual = load_cmc_manual()
+    manual = load_cmc_manual(_active_manual_path())
 
     prefix = (
         "You are the embedded AI assistant for Computer Main Centre (CMC).\n"
-        "Your job is to help the user by generating valid CMC commands and clear "
-        "technical explanations when asked.\n\n"
-        "General rules you MUST follow:\n"
-        "  - Obey the contents of the CMC AI Manual exactly.\n"
-        "  - Use single quotes for all file paths.\n"
-        "  - Use semicolons to chain multiple commands; never put a semicolon at the end.\n"
-        "  - Never invent new commands or future features. Only use commands that exist.\n"
-        "  - Never perform destructive actions (delete, gitclean, etc.) unless the user\n"
-        "    clearly and explicitly requests them.\n"
-        "  - Prefer plain explanations unless the user asks only for a command.\n"
-        "  - When commands are requested, output them in fenced code blocks.\n"
-        "  - When unsure, ask a brief clarifying question instead of guessing.\n\n"
-        "Observer / filesystem rules (read‑only view):\n"
+        "You are NOT a general chatbot. You MUST answer strictly in terms of CMC,\n"
+        "its commands, its behaviour and its manual.\n\n"
+
+        "HIGH-PRIORITY RULES (OVERRIDE ANY TRAINING HABITS):\n"
+        "  1. All file and folder paths in CMC MUST use single quotes.\n"
+        "     Example: copy 'C:/Project/file.txt' 'C:/Backup/file.txt'\n"
+        "     Never, ever claim that CMC uses double quotes for paths.\n"
+        "     If the user asks whether to use single or double quotes,\n"
+        "     you MUST answer: \"CMC uses single quotes for paths.\"\n"
+        "  2. Use semicolons ';' to chain multiple CMC commands on one line,\n"
+        "     and NEVER put a semicolon at the very end of the line.\n"
+        "  3. Never invent new commands or future features. Only use commands\n"
+        "     that exist in the CMC manual.\n"
+        "  4. Never perform destructive actions (delete, gitclean, etc.) unless\n"
+        "     the user clearly and explicitly requests them.\n"
+        "  5. Prefer short, direct explanations unless the user explicitly asks\n"
+        "     for a long answer or full script.\n"
+        "  6. When the user asks for commands, output them in fenced code blocks.\n"
+        "  7. If you are not sure what to do, ask a brief clarifying question\n"
+        "     instead of guessing.\n"
+        "  8. The CMC `space` command is a disk usage and cleanup helper. It is\n"
+        "     NOT related to the U.S. Space Command, space agencies, or the military.\n"
+        "     When the user asks about `space` in CMC, only talk about the CMC\n"
+        "     command, not real-world space organizations.\n\n"
+
+        "Observer / filesystem rules (read-only view):\n"
         "  - You may request at most one OBSERVER operation per user query.\n"
+        "  - Allowed observer commands are:\n"
         "  - Allowed observer commands are:\n"
         "        OBSERVER: find name='substring'\n"
         "        OBSERVER: ls path='C:/Some/Folder' depth=2\n"
+        "        OBSERVER: qfind term='text' limit=20\n"
         "  - 'find' performs a substring search over file and folder names.\n"
         "  - 'ls' lists entries inside the given path; depth is an optional integer.\n"
+        "  - 'qfind' performs a fast global indexed search using the CMC path index.\n"
         "  - Do not invent other observer operations or parameters.\n"
         "  - After emitting an OBSERVER line, you must wait for JSON results and then\n"
         "    answer the original question using that JSON. Do not emit another\n"
         "    OBSERVER line in the second response.\n\n"
-        "Current CMC high‑level context (JSON):\n"
+        "  - Do not invent other observer operations or parameters.\n"
+        "  - After emitting an OBSERVER line, you must wait for JSON results and then\n"
+        "    answer the original question using that JSON. Do not emit another\n"
+        "    OBSERVER line in the second response.\n\n"
+
+        "Current CMC high-level context (JSON):\n"
         f"{ctx}\n\n"
-        "Below is the full CMC AI manual you must treat as ground truth.\n"
-        "----- BEGIN CMC_AI_Manual.md -----\n"
+        "Below is the CMC AI manual you must treat as ground truth.\n"
+        "If anything in your pretrained knowledge conflicts with this manual,\n"
+        "the manual and the rules above ALWAYS win.\n"
+        "----- BEGIN CMC_AI_Manual -----\n"
     )
 
-    suffix = "\n----- END CMC_AI_Manual.md -----\n"
+    suffix = "\n----- END CMC_AI_Manual -----\n"
     return prefix + manual + suffix
 
 
+
+
 # ---------------------------------------------------------------------------
-# Ollama backend integration
+# Dynamic model + manual selection
 # ---------------------------------------------------------------------------
 
-_OLLAMA_MODEL = os.getenv("CMC_AI_MODEL", "llama3.2")
+def _get_active_model() -> str:
+    """Load active AI model from CMC_Config.json."""
+    try:
+        import CMC_Config
+        cfg = CMC_Config.load_config()
+        return cfg.get("ai", {}).get("model", "qwen2.5:7b-instruct")
+    except Exception:
+        return "qwen2.5:7b-instruct"
+
+
+def _active_manual_path() -> Path:
+    """Choose correct manual depending on the active model."""
+    model = _get_active_model().lower()
+    here = Path(__file__).resolve().parent
+
+    # heavy models → full manual
+    if any(x in model for x in ("32b", "72b", "70b")):
+        return here / "CMC_AI_Manual_MEDIUM.md"
+
+    # lighter models → mini
+    return here / "CMC_AI_Manual_MINI.md"
+
+    
 _OLLAMA_URL = os.getenv("CMC_AI_OLLAMA_URL", "http://localhost:11434/api/chat")
 
 
@@ -155,7 +208,7 @@ def _call_ai_backend(messages: List[Dict[str, str]]) -> str:
         ) from exc
 
     payload = {
-        "model": _OLLAMA_MODEL,
+        "model": _get_active_model(),
         "messages": messages,
         "stream": False,
     }
@@ -244,6 +297,44 @@ def _observer_ls(path: str, depth: Optional[int] = None) -> Dict[str, Any]:
     if depth is not None:
         params["depth"] = int(depth)
     return _observer_request("/ls", params)
+def _observer_qfind(term: str, limit: int | None = None) -> Dict[str, Any]:
+    """Use the local path index to perform an advanced global search."""
+    try:
+        from path_index_local import super_find
+    except Exception as exc:  # pragma: no cover - optional dependency
+        raise RuntimeError(
+            "The CMC path index is not available for qfind; ensure path_index_local.py "
+            "is present and that you have built the index with /qbuild."
+        ) from exc
+
+    max_results = limit or 20
+    try:
+        results = super_find(term, max_results)
+    except Exception as exc:
+        raise RuntimeError(f"path index qfind failed: {exc}") from exc
+
+    return {
+        "op": "qfind",
+        "query": term,
+        "limit": max_results,
+        "results": results,
+    }
+    
+    # ---------- Local Fuzzy Path Search (AI super-find) ----------
+def ai_smart_find(query: str, limit: int = 20):
+    """
+    Natural-language fuzzy search for local files/folders.
+    Uses the same engine as /find.
+    """
+    try:
+        from path_index_local import super_find
+        results = super_find(query, limit)
+        return results
+    except Exception as e:
+        return [{"path": f"[AI-Search-Error] {e}", "score": 0}]
+
+
+
 
 
 def _extract_observer_command(reply: str) -> Optional[Dict[str, Any]]:
@@ -356,6 +447,9 @@ def run_ai_assistant(
         elif obs_cmd["op"] == "ls":
             obs_data = _observer_ls(obs_cmd["path"], obs_cmd.get("depth"))
             obs_desc = f"/ls path='{obs_cmd['path']}'"
+        elif obs_cmd["op"] == "qfind":
+            obs_data = _observer_qfind(obs_cmd["term"], obs_cmd.get("limit"))
+            obs_desc = f"qfind term='{obs_cmd['term']}'"
         else:
             # Unknown op – fall back to first reply
             return first_reply.strip()
