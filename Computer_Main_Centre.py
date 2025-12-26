@@ -3589,6 +3589,13 @@ def handle_command(s: str):
 
             if new_home and Path(new_home).exists():
                 _apply_java_env_local(new_home)
+
+                # Ensure PATH bin is present for this process (matches system PATH)
+                binp = str(Path(new_home) / "bin")
+                if binp not in os.environ.get("PATH", ""):
+                    os.environ["PATH"] = binp + ";" + os.environ.get("PATH", "")
+                    
+                    
                 STATE["java_version"] = Path(new_home).name
                 _save_java_cfg_local(STATE["java_version"], new_home)
                 p(f"🔄 Reloaded Java from registry: {new_home}")
@@ -3602,8 +3609,7 @@ def handle_command(s: str):
         
     
   
-
-         # ---------- Improved Java change ----------
+     # ---------- Improved Java change ----------
     m = re.match(r"^java\s+change\s+(.+)$", s, re.I)
     if m:
         arg = m.group(1).strip().strip('"').strip("'")
@@ -3615,7 +3621,7 @@ def handle_command(s: str):
             target_path = JAVA_VERSIONS[arg]
             chosen_key = arg
         else:
-            # 2. Try partial match (e.g. "17" matches "jdk-17.0.16.8-hotspot")
+            # 2. Try partial match (e.g. "17" matches "jdk-17.0.x")
             for k, v in JAVA_VERSIONS.items():
                 if arg in k or arg in v:
                     target_path = v
@@ -3631,47 +3637,70 @@ def handle_command(s: str):
             p(f"[red]Java version or path not found:[/red] {arg}")
             return
 
-        # Apply to current process
+        # ---- Apply to current process (CMC runtime only) ----
         os.environ["JAVA_HOME"] = target_path
         bin_path = str(Path(target_path) / "bin")
-        if bin_path not in os.environ["PATH"]:
-            os.environ["PATH"] += f";{bin_path}"
+        if bin_path not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = os.environ.get("PATH", "") + f";{bin_path}"
+
         STATE["java_version"] = chosen_key or arg
         _save_java_cfg_local(STATE["java_version"], target_path)
 
-
-        # Apply system-wide via setx
+        # ---- Apply system-wide (CORRECT: System PATH rewrite) ----
         try:
-            subprocess.run(["setx", "JAVA_HOME", target_path],
-                           shell=True, check=True, text=True, capture_output=True)
-            subprocess.run(["setx", "PATH", f"%PATH%;{bin_path}"],
-                           shell=True, check=True, text=True, capture_output=True)
+            import winreg
+
+            # Set JAVA_HOME (system-wide)
+            subprocess.run(
+                ["setx", "JAVA_HOME", target_path, "/M"],
+                shell=True,
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+
+            # Rewrite SYSTEM PATH safely
+            java_bin = str(Path(target_path) / "bin")
+            reg_path = r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"
+
+            with winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE,
+                reg_path,
+                0,
+                winreg.KEY_READ | winreg.KEY_WRITE,
+            ) as key:
+                current_path, _ = winreg.QueryValueEx(key, "Path")
+
+                parts = current_path.split(";")
+
+                # Remove ALL existing Java/JDK paths
+                parts = [
+                    p for p in parts
+                    if "java" not in p.lower() and "jdk" not in p.lower()
+                ]
+
+                # Put selected Java FIRST
+                parts.insert(0, java_bin)
+
+                new_path = ";".join(parts)
+
+                winreg.SetValueEx(
+                    key,
+                    "Path",
+                    0,
+                    winreg.REG_EXPAND_SZ,
+                    new_path,
+                )
+
             p(f"✅ Java set to: {chosen_key or target_path}")
-            p("⚙️ You can now run 'java reload' in CMC to refresh without reopening.")
+            p("⚠️ Restart terminals, Minecraft servers, and launchers to apply PATH changes.")
+
         except Exception as e:
-            p(f"[yellow]Setx warning:[/yellow] {e}")
+            p(f"[yellow]Java PATH update warning:[/yellow] {e}")
+
         return
 
 
-
-        # Apply to current process
-        _apply_java_env_local(home)
-        STATE["java_version"] = ver
-        _save_java_cfg_local(ver, home)
-
-        # Apply system-wide (setx)
-        try:
-            subprocess.run(["setx", "JAVA_HOME", home], shell=True, check=True,
-                           text=True, capture_output=True)
-            bin_path = str(Path(home) / "bin")
-            # Append bin to PATH
-            subprocess.run(["setx", "PATH", f"%PATH%;{bin_path}"], shell=True, check=True,
-                           text=True, capture_output=True)
-            p(f"✅ Java {ver} set system-wide ({home})")
-            p("⚠️ Close and reopen terminals/apps to pick up new PATH.")
-        except Exception as e:
-            p(f"[yellow]Setx warning:[/yellow] {e}")
-        return
         
             # ---------- System Info ----------
     m = re.match(r"^sysinfo(?:\s+save\s+'(.+?)')?$", s, re.I)
@@ -4184,10 +4213,6 @@ Real syntax (verified):
 • macro list
 • macro clear
 
-⚠ IMPORTANT:
-Your CMC version does NOT support multi-command macros like:
-    cmd1; cmd2
-Each macro may only contain ONE command unless we inspect the parser further.
 
 Examples:
   macro add desk = cd '%HOME%/Desktop'
