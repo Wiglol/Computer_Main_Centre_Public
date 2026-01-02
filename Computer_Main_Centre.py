@@ -75,6 +75,11 @@ import json
 import pathlib
 Path = pathlib.Path
 
+# --- GitHub config path ---
+GIT_CFG = Path.home() / ".ai_helper" / "github.json"
+GIT_CFG.parent.mkdir(parents=True, exist_ok=True)
+
+
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.styles import Style
@@ -562,44 +567,64 @@ def handle_git_commands(s: str, low: str) -> bool:
 
 
     # /gitsetup "RepoName"
+       # /gitsetup "RepoName" — create GitHub repo + link + push if possible
     m = re.match(r'^/gitsetup\s+"([^"]+)"$', s, re.I)
     if m:
         repo = m.group(1).strip()
         p(f"🔧 Setting up GitHub repo '{repo}' ...")
+
+        # 1. Get token
         tok = _git_token()
         if not tok:
-            p("[red]❌ No token provided.[/red]")
+            p("[red]❌ No GitHub token provided.[/red]")
             return True
-        user = _git_username_from_token(tok) or "unknown"
+
+        user = _git_username_from_token(tok)
+        if not user:
+            p("[red]❌ Could not determine GitHub username from token.[/red]")
+            return True
+
+        # 2. Create repo via API (ignore if it already exists)
         ok, msg = _git_api_create_repo(tok, repo)
         if not ok:
-            p(f"❌ GitHub API error: {msg}")
-            return True
-        # Link and initial commit/push
+            if "already exists" in msg.lower():
+                p("ℹ️ GitHub repo already exists — continuing.")
+            else:
+                p(f"[red]❌ GitHub API error:[/red]\n{msg}")
+                return True
+
         try:
+            # 3. Ensure local repo + main branch
             _git_ensure_repo_initialized(root)
             _git_ensure_main_branch(root)
+
+            # 4. Set remote
             remote_url = f"https://github.com/{user}/{repo}.git"
             _git_set_remote(root, remote_url)
-            # sane defaults
-            _gitignore_add(root, ["paths.db", "centre_index*.json", "__pycache__/"])
-            _git_run("git add .", cwd=str(root))
-            _git_run('git commit -m "Initial commit"', cwd=str(root))
-            # Warn large files
-            big = _git_warn_large_files(root)
-            if big:
-                p("⚠️ Large tracked files (>100MB) detected:")
-                for b in big:
-                    p(f"  - {b}")
-                p("Add them to .gitignore or set up LFS before pushing.")
-                return True
-            # first push
-            _git_run("git branch -M main", cwd=str(root))
-            _git_run("git push --set-upstream origin main", cwd=str(root))
-            p("✅ Repository created and pushed!")
+
+            # 5. Add sane defaults
+            _gitignore_add(root, ["__pycache__/", "*.log", "*.tmp"])
+
+            # 6. Stage everything
+            _git_run("git add -A", cwd=str(root))
+
+            # 7. Commit if needed
+            commit_out = _git_run('git commit -m "Initial commit"', cwd=str(root))
+            if "nothing to commit" in commit_out.lower():
+                p("ℹ️ Repo already clean — skipping commit.")
+
+            # 8. Push safely
+            try:
+                _git_run("git push --set-upstream origin main", cwd=str(root))
+                p("✅ Repository linked and pushed!")
+            except Exception:
+                p("ℹ️ Repo linked — nothing new to push.")
+
         except Exception as e:
             p(f"[red]❌ gitsetup failed:[/red] {e}")
+
         return True
+
 
     # /gitupdate "message"
     m = re.match(r'^/gitupdate\s+"([^"]+)"$', s, re.I)
