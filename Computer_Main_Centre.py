@@ -295,419 +295,6 @@ STATE["java_version"] = detect_java_version()
 
 
 
-# ---------- GitHub Integration (Wizard) ----------
-import base64
-import shutil
-
-def _git_run(cmd, cwd=None):
-    """
-    Unified Git runner with safety checks.
-    Accepts either a list of args (["status"]) or a string ("git status").
-    """
-    if not shutil.which("git"):
-        p("[red]❌ Git is not installed or not found in PATH.[/red]")
-        return "(no git)"
-
-    try:
-        if isinstance(cmd, (list, tuple)):
-            full_cmd = ["git"] + list(cmd)
-            result = subprocess.run(full_cmd, cwd=cwd, text=True, capture_output=True, check=True)
-        else:
-            result = subprocess.run(cmd, cwd=cwd, shell=True, text=True, capture_output=True, check=True)
-
-        out = (result.stdout or "").strip()
-        err = (result.stderr or "").strip()
-        return (out + ("\n" + err if err else "")).strip() or "(done)"
-
-    except subprocess.CalledProcessError as e:
-        out = (e.stdout or "").strip()
-        err = (e.stderr or "").strip()
-        p(f"[red]❌ Git command failed:[/red]\n{out}\n{err}")
-        return "(git error)"
-
-
-def _git_token():
-    """Read/write GitHub Personal Access Token (classic) in ~/.ai_helper/github.json."""
-    if GIT_CFG.exists():
-        try:
-            data = json.loads(GIT_CFG.read_text(encoding="utf-8"))
-            tok = data.get("token", "").strip()
-            if tok and tok.startswith("ghp_"):
-                return tok
-        except Exception:
-            pass
-    # Ask once
-    tok = input("Enter your GitHub Personal Access Token (classic): ").strip()
-    if tok:
-        GIT_CFG.write_text(json.dumps({"token": tok}, indent=2), encoding="utf-8")
-        return tok
-    return None
-
-def _git_username_from_token(token: str) -> str | None:
-    """Call GitHub API to get the username associated with this token."""
-    try:
-        import urllib.request, urllib.error
-        req = urllib.request.Request(
-            "https://api.github.com/user",
-            headers={"Authorization": f"token {token}",
-                     "User-Agent": "CMC-GitAssistant"}
-        )
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            js = json.loads(resp.read().decode("utf-8"))
-            return js.get("login")
-    except Exception:
-        return None
-
-def _git_api_create_repo(token: str, name: str) -> tuple[bool, str]:
-    """Create repo via API. Returns (ok, message_or_url)."""
-    try:
-        import urllib.request, urllib.error
-        body = json.dumps({"name": name, "auto_init": False}).encode("utf-8")
-        req = urllib.request.Request(
-            "https://api.github.com/user/repos",
-            data=body,
-            headers={
-                "Authorization": f"token {token}",
-                "Content-Type": "application/json",
-                "User-Agent": "CMC-GitAssistant"
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            js = json.loads(resp.read().decode("utf-8"))
-            return True, js.get("html_url", "")
-    except Exception as e:
-        try:
-            err = e.read().decode("utf-8")  # type: ignore[attr-defined]
-        except Exception:
-            err = str(e)
-        return False, err
-
-def _git_ensure_repo_initialized(root: Path) -> None:
-    """Run git init if .git missing."""
-    if not (root / ".git").exists():
-        _git_run("git init", cwd=str(root))
-
-def _git_set_remote(root: Path, remote_url: str) -> None:
-    """Set or update origin remote."""
-    try:
-        _git_run("git remote show origin", cwd=str(root))
-        _git_run(f"git remote set-url origin {remote_url}", cwd=str(root))
-    except Exception:
-        _git_run(f"git remote add origin {remote_url}", cwd=str(root))
-
-def _git_ensure_main_branch(root: Path) -> None:
-    try:
-        _git_run("git rev-parse --verify main", cwd=str(root))
-    except Exception:
-        # create or rename to main
-        try:
-            _git_run("git branch -M main", cwd=str(root))
-        except Exception:
-            _git_run("git checkout -b main", cwd=str(root))
-
-def _git_warn_large_files(root: Path) -> list[str]:
-    """Return list of tracked files > 100 MB, to prevent GitHub push failure."""
-    big = []
-    try:
-        out = _git_run("git ls-files -s", cwd=str(root))
-        files = [line.split()[-1] for line in out.splitlines() if line.strip()]
-        for f in files:
-            fp = root / f
-            if fp.exists() and fp.is_file() and fp.stat().st_size > 100 * 1024 * 1024:
-                big.append(f)
-    except Exception:
-        pass
-    return big
-
-def _gitignore_add(root: Path, patterns: list[str]) -> None:
-    gi = root / ".gitignore"
-    lines = []
-    if gi.exists():
-        lines = gi.read_text(encoding="utf-8", errors="ignore").splitlines()
-    for ptn in patterns:
-        if ptn not in lines:
-            lines.append(ptn)
-    gi.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-def handle_git_commands(s: str, low: str) -> bool:
-    """
-    Handle all /git* commands. Return True if matched.
-    Commands:
-      /gitsetup "RepoName"
-      /gitlink "https://github.com/USER/REPO.git"
-      /gitupdate "message"
-      /gitpull
-      /gitstatus
-      /gitlog
-      /gitbranch
-      /gitignore add <pattern>
-      /gitclean
-      /gitfix
-      /gitdoctor
-      /gitlfs setup
-    """
-    root = Path.cwd()
-    # Only react to /git... commands
-    if not low.startswith("/git"):
-        return False
-
-    # /gitignore add <pattern>
-    m = re.match(r'^/gitignore\s+add\s+(.+)$', s, re.I)
-    if m:
-        patterns = [pt.strip() for pt in m.group(1).split(",") if pt.strip()]
-        _gitignore_add(root, patterns)
-        p(f"Added to .gitignore: {', '.join(patterns)}")
-        return True
-
-    # /gitclean — remove common local junk from tracking
-    if low == "/gitclean":
-        try:
-            # untrack big/local caches (keeps files on disk)
-            _git_run("git rm --cached -r __pycache__", cwd=str(root))
-        except Exception:
-            pass
-        _gitignore_add(root, ["__pycache__/"])
-        p("Cleaned git cache entries and updated .gitignore.")
-        return True
-
-       # /gitlfs setup
-    if low == "/gitlfs setup":
-        messages = []
-        try:
-            _git_run("git lfs install", cwd=str(root))
-            _git_run('git lfs track "*.db" "*.zip" "*.jar" "*.exe"', cwd=str(root))
-            messages.append("✅ Git LFS initialized for *.db, *.zip, *.jar, *.exe")
-            messages.append("💡 Remember to commit .gitattributes after setup.")
-        except Exception as e:
-            messages.append(f"❌ LFS setup failed: {e}")
-
-        text = "\n".join(messages)
-        if RICH:
-            from rich.panel import Panel
-            console.print(Panel(text, title="Git LFS Setup", border_style="cyan", padding=(0, 1)))
-        else:
-            print(text)
-        return True
-
-
-    # /gitdoctor — diagnostics
-
-    if low == "/gitdoctor":
-        msgs = []
-        try:
-            _git_run("git --version")
-            msgs.append("git: OK")
-        except Exception as e:
-            msgs.append(f"git: {e}")
-        if (root / ".git").exists():
-            msgs.append(".git: exists")
-            # remote?
-            try:
-                r = _git_run("git remote -v", cwd=str(root))
-                msgs.append("remote:\n" + r)
-            except Exception as e:
-                msgs.append(f"remote: {e}")
-            # branch?
-            try:
-                b = _git_run("git rev-parse --abbrev-ref HEAD", cwd=str(root))
-                msgs.append(f"branch: {b}")
-            except Exception as e:
-                msgs.append(f"branch: {e}")
-        else:
-            msgs.append(".git: missing")
-        tok = "present" if _git_token() else "missing"
-        msgs.append(f"token: {tok}")
-        text = "\n".join(msgs)
-
-        if RICH:
-            from rich.panel import Panel
-            console.print(Panel(text, title="Git Doctor", border_style="cyan", padding=(0, 1)))
-        else:
-            print(text)
-        return True
-
-
-        # /gitfix — auto-repair common issues
-    if low == "/gitfix":
-        messages = []
-        try:
-            _git_ensure_repo_initialized(root)
-            _git_ensure_main_branch(root)
-            messages.append("✅ Repo initialized and main branch verified.")
-        except Exception as e:
-            messages.append(f"❌ ensure repo failed: {e}")
-        try:
-            _git_run("git rev-parse --abbrev-ref --symbolic-full-name @{u}", cwd=str(root))
-            messages.append("✅ Upstream already set.")
-        except Exception:
-            messages.append("⚠️ Upstream missing — run `/gitlink \"https://github.com/USER/REPO.git\"` then `/gitupdate`.")
-        
-        text = "\n".join(messages)
-        if RICH:
-            from rich.panel import Panel
-            console.print(Panel(text, title="Git Fix", border_style="cyan", padding=(0, 1)))
-        else:
-            print(text)
-        return True
-
-
-    # /gitlink "https://github.com/USER/REPO.git"
-    m = re.match(r'^/gitlink\s+"([^"]+)"$', s, re.I)
-    if m:
-        url = m.group(1).strip()
-        try:
-            _git_ensure_repo_initialized(root)
-            _git_ensure_main_branch(root)
-            _git_set_remote(root, url)
-            p(f"Remote origin set to: {url}")
-        except Exception as e:
-            p(f"[red]❌ gitlink failed:[/red] {e}")
-        return True
-
-
-    # /gitsetup "RepoName"
-       # /gitsetup "RepoName" — create GitHub repo + link + push if possible
-    m = re.match(r'^/gitsetup\s+"([^"]+)"$', s, re.I)
-    if m:
-        repo = m.group(1).strip()
-        p(f"🔧 Setting up GitHub repo '{repo}' ...")
-
-        # 1. Get token
-        tok = _git_token()
-        if not tok:
-            p("[red]❌ No GitHub token provided.[/red]")
-            return True
-
-        user = _git_username_from_token(tok)
-        if not user:
-            p("[red]❌ Could not determine GitHub username from token.[/red]")
-            return True
-
-        # 2. Create repo via API (ignore if it already exists)
-        ok, msg = _git_api_create_repo(tok, repo)
-        if not ok:
-            if "already exists" in msg.lower():
-                p("ℹ️ GitHub repo already exists — continuing.")
-            else:
-                p(f"[red]❌ GitHub API error:[/red]\n{msg}")
-                return True
-
-        try:
-            # 3. Ensure local repo + main branch
-            _git_ensure_repo_initialized(root)
-            _git_ensure_main_branch(root)
-
-            # 4. Set remote
-            remote_url = f"https://github.com/{user}/{repo}.git"
-            _git_set_remote(root, remote_url)
-
-            # 5. Add sane defaults
-            _gitignore_add(root, ["__pycache__/", "*.log", "*.tmp"])
-
-            # 6. Stage everything
-            _git_run("git add -A", cwd=str(root))
-
-            # 7. Commit if needed
-            commit_out = _git_run('git commit -m "Initial commit"', cwd=str(root))
-            if "nothing to commit" in commit_out.lower():
-                p("ℹ️ Repo already clean — skipping commit.")
-
-            # 8. Push safely
-            try:
-                _git_run("git push --set-upstream origin main", cwd=str(root))
-                p("✅ Repository linked and pushed!")
-            except Exception:
-                p("ℹ️ Repo linked — nothing new to push.")
-
-        except Exception as e:
-            p(f"[red]❌ gitsetup failed:[/red] {e}")
-
-        return True
-
-
-    # /gitupdate "message"
-    m = re.match(r'^/gitupdate\s+"([^"]+)"$', s, re.I)
-    if m:
-        msg = m.group(1).strip()
-        try:
-            _git_ensure_repo_initialized(root)
-            _git_ensure_main_branch(root)
-            # ensure remote exists (won’t overwrite if present)
-            try:
-                _git_run("git remote show origin", cwd=str(root))
-            except Exception:
-                p("No remote set. Use /gitlink \"https://github.com/USER/REPO.git\" first.")
-                return True
-            # large file guard
-            big = _git_warn_large_files(root)
-            if big:
-                p("⚠️ Large tracked files (>100MB) detected (push will fail on GitHub):")
-                for b in big:
-                    p(f"  - {b}")
-                p("Tip: /gitignore add paths.db, then commit again.")
-                return True
-            _git_run("git add .", cwd=str(root))
-            # commit (skip-empty)
-            try:
-                _git_run(f'git commit -m "{msg}"', cwd=str(root))
-            except Exception as e:
-                if "nothing to commit" not in str(e).lower():
-                    raise
-                p("Nothing to commit.")
-            # push (auto set upstream if needed)
-            try:
-                _git_run("git push", cwd=str(root))
-            except Exception as e:
-                if "has no upstream branch" in str(e):
-                    _git_run("git push --set-upstream origin main", cwd=str(root))
-                else:
-                    raise
-            p("✅ Updated GitHub.")
-        except Exception as e:
-            p(f"[red]❌ gitupdate failed:[/red] {e}")
-        return True
-
-    # /gitpull
-    if low == "/gitpull":
-        try:
-            _git_run("git pull", cwd=str(root))
-            p("✅ Pulled latest changes.")
-        except Exception as e:
-            p(f"[red]❌ gitpull failed:[/red] {e}")
-        return True
-
-    # /gitstatus
-    if low == "/gitstatus":
-        try:
-            out = _git_run("git status", cwd=str(root))
-            p(out)
-        except Exception as e:
-            p(f"[red]❌ gitstatus failed:[/red] {e}")
-        return True
-
-    # /gitlog
-    if low == "/gitlog":
-        try:
-            out = _git_run("git log --oneline -n 10", cwd=str(root))
-            p("🕓 Recent commits:\n" + out)
-        except Exception as e:
-            p(f"[red]❌ gitlog failed:[/red] {e}")
-        return True
-
-    # /gitbranch
-    if low == "/gitbranch":
-        try:
-            out = _git_run("git branch -a", cwd=str(root))
-            p(out)
-        except Exception as e:
-            p(f"[red]❌ gitbranch failed:[/red] {e}")
-        return True
-
-    return True  # matched some /git* pattern but fell through
-
-
-
 
 # ---------- Local Path Index (portable import) ----------
 try:
@@ -1162,13 +749,29 @@ def op_unzip(zip_path, dest_folder):
 
 
 def op_open(path):
-    fp = resolve(path)
+    raw = path.strip().strip('"').strip("'")
+
+    # ---------- URL handling ----------
+    if raw.lower().startswith(("http://", "https://")):
+        try:
+            if not STATE["dry_run"]:
+                import webbrowser
+                webbrowser.open(raw)
+                log_action(f"OPENED_URL {raw}")
+                p(f"🌐 Opened: {raw}")
+        except Exception as e:
+            p(f"[red]❌ {e}[/red]" if RICH else f"Error: {e}")
+        return
+
+    # ---------- Local path handling ----------
+    fp = resolve(raw)
     try:
         if not STATE["dry_run"]:
             os.startfile(str(fp))
             log_action(f"OPENED {fp}")
     except Exception as e:
         p(f"[red]❌ {e}[/red]" if RICH else f"Error: {e}")
+
 
 def op_explore(path):
     fp = resolve(path)
@@ -3374,6 +2977,16 @@ def handle_command(s: str):
     # Normalize once
     low = s.lower()
     
+    # ---------- Git commands ----------
+    try:
+       from CMC_Git import handle_git_commands
+       if handle_git_commands(s, low, CWD, p, RICH, console if "console" in globals() else None):
+           return
+    except Exception as e:
+        p(f"[red]❌ Git module error:[/red] {e}")
+        return
+
+    
     
     # ---------- Project Scan ----------
     m = re.match(r"^projectscan$", s, re.I)
@@ -4264,25 +3877,68 @@ Examples:
 """
 
     sec7 = """
-[bold]7. Git Helpers[/bold]
+[bold]7. Git (GitHub publishing)[/bold]
 -----------------------------------
 
-• /gitsetup
-• /gitlink '<url>'
-• /gitupdate "<msg>"
-• /gitpull
-• /gitstatus
-• /gitlog
-• /gitignore add '<pattern>'
-• /gitclean
-• /gitdoctor
+CMC provides a simplified Git workflow focused on fast publishing.
+You do NOT need to know normal git commands.
+
+• git upload
+  Create a new GitHub repository from the current folder.
+  Asks for repo name, public/private, and commit message.
+  Automatically commits, pushes, saves the folder → repo mapping,
+  and opens the repository in the browser.
+
+• git update
+  Commit and push changes from the current folder to its linked repository.
+  Uses the saved folder → repository mapping automatically.
+
+• git update <repo>
+  Commit and push the current folder to the specified repository name.
+  Useful if you want to relink the folder or push to a different repo.
+
+• git status
+  Show current Git status (changed, staged, clean).
+
+• git log
+  Show recent commits (short format).
+
+• git doctor
+  Diagnostic command.
+  Shows:
+   - which folder CMC is using
+   - detected repository root
+   - whether Git is installed
+   - whether a GitHub token is stored
+   - saved folder → repository mapping
+
+• git repo list
+  List all GitHub repositories owned by your account.
+  Shows repository names and whether they are public or private.
+  Useful for copying repo names for other commands.
+
+• git repo delete <repo>
+  Permanently delete a GitHub repository by name.
+  Requires typing DELETE to confirm.
+  This action is irreversible.
+
+Notes:
+• Git commands use the CMC working directory (shown in the prompt).
+• GitHub token is requested once and stored locally.
+• Empty folders are not tracked by Git.
+• .gitignore rules are always respected.
+• Repository deletion affects GitHub only (local files are untouched).
 
 Examples:
-  /gitsetup
-  /gitlink 'https://github.com/user/repo.git'
-  /gitupdate "Backup %DATE%"
-  /gitpull
+  git upload
+  git update
+  git update MyProject
+  git repo list
+  git repo delete OldTestRepo
+  git status
+  git doctor
 """
+
 
     sec8 = """
 [bold]8. Java & Servers[/bold]
