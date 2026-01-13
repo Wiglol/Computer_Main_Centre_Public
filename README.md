@@ -1,117 +1,112 @@
-
 # Computer Main Centre (CMC)
 ### Local Command Console for Windows  
 
-CMC is a **local automation console** for Windows that combines:
+CMC is a **local automation console** for Windows that combines powerful tools into a single, consistent command environment:
 
 - File management  
-- Git tools  
+- GitHub publishing  
 - Macros & automation  
 - Java version management  
-- Quick path indexing  
-- Web utilities  
-- Download tools  
+- Quick path indexing & search  
+- Web project setup tools  
+- Download helpers  
 - Safe execution modes  
 - A fully embedded **local AI assistant** powered by **Ollama**
 
-CMC is designed to make your Windows environment **faster, safer, smarter**, and fully offline-capable.
+CMC is designed to make your Windows workflow **faster, safer, and smarter**, while remaining **fully offline-capable**.
 
 ---
 
 ## 🚀 Features
 
 ### 🟦 Core Console Capabilities
-- Full file operations: create/read/move/delete/zip/unzip  
-- Safe modes: Dry-Run, Batch, SSL toggle  
+- Full file operations: create, read, move, delete, zip, unzip  
+- Safe execution modes: **Dry-Run**, **Batch**, **SSL toggle**  
 - Persistent macros & aliases  
-- Fast file search with `/qbuild`, `/qfind`  
-- Autocompletion  
-- Git helper commands  
-- Java switching (`java list`, `java change`)  
+- Fast global file search with `/qbuild`, `/qfind`, `/find`  
+- Command autocompletion  
+- Simplified GitHub publishing (`git upload`, `git update`)  
+- Java version switching (`java list`, `java change`, `java reload`)  
 - Download helpers (`download`, `download_list`, `youtube`, `search web`)  
-- Project setup tools (`projectsetup`, `websetup`, `webcreate`)
+- Project setup tools (`projectsetup`, `websetup`, `webcreate`)  
+- Script & program execution with correct working directories  
 
 ---
 
 ## 🤖 AI Features (Offline)
 
-CMC includes an embedded AI assistant using **Ollama**:
+CMC includes a built-in AI assistant using **Ollama**:
 
-```
 ai <your question>
-```
+
+markdown
+Copy code
 
 The assistant:
 
-- Runs **fully offline**  
-- Generates **valid CMC commands**  
-- Uses single-quoted paths  
-- Creates macros  
-- Explains commands  
-- Respects safety rules  
-- Reads `CMC_AI_Manual_MINI.md` 
+- Runs **fully offline**
+- Generates **valid CMC commands**
+- Uses correct single-quoted paths
+- Creates macros & automation
+- Explains commands and workflows
+- Respects safety modes (Dry-Run, Batch)
+- Reads `CMC_AI_Manual-MEDIUM.md` as its knowledge base
 
----
-
-## 🧩 File Overview
-
-```
-CMC/
-│ Computer_Main_Centre.py      ← Main console application
-│ assistant_core.py            ← Embedded AI engine
-│ CMC_AI_Manual_MINI.md        ← Mini manual the AI uses
-│ CMC_AI_Manual.md             ← Full reference manual (optional)
-│ CMC_AI_Ollama_Setup.cmd      ← Auto-installs AI model
-│ Start_CMC.vbs                ← Universal launcher
-│ README.md                    ← This file
-└ (misc files...)
-```
+The AI is designed to **assist**, not take control.
 
 ---
 
 ## 🧰 Requirements
 
-- Windows 10 or 11  
+- Windows 10 or Windows 11  
 - Python 3.10+  
+- Git for Windows (for GitHub features)  
 - Ollama (for AI mode): https://ollama.com/download  
-- No internet required after installation
+
+> Internet access is only required for installation.  
+> **CMC and AI mode work fully offline after setup.**
 
 ---
 
-## 🛠 Installation Guide
+## 🛠 Installation
 
-### 1. Install Python  
-From https://python.org/downloads — check “Add to PATH”.
+### 1️⃣ Install Python  
+Download from https://python.org/downloads  
+✔ Check **“Add Python to PATH”** during installation.
 
-### 2. Install Ollama  
+### 2️⃣ Install Ollama  
 Download from https://ollama.com/download  
-Run it once so the service initializes.
+Run it once to initialize the service.
 
-### 3. Get CMC  
-Download or clone the repository.
+### 3️⃣ Get CMC  
+Download or clone this repository anywhere on your system.
 
-### 4. Run AI Setup Script  
-Inside the CMC folder:
+### 4️⃣ Set up the AI model  
+Inside the CMC folder, run:
 
-```
 CMC_AI_Ollama_Setup.cmd
-```
+
+markdown
+Copy code
 
 This script will:
 
-- Detect Ollama  
-- Download `qwen2.5:7b-instruct`  
-- Set model environment variable  
-- Prepare AI mode automatically  
+- Detect Ollama
+- Download `qwen2.5:7b-instruct`
+- Configure the model automatically
+- Prepare AI mode for use
 
-### 5. Launch CMC  
+### 5️⃣ Launch CMC  
 Double-click:
 
-```
 Start_CMC.vbs
-```
 
-This will auto-start Ollama silently and launch CMC.
+yaml
+Copy code
+
+This will:
+- Start Ollama silently (if needed)
+- Launch the CMC console
 
 ---
 
@@ -119,37 +114,62 @@ This will auto-start Ollama silently and launch CMC.
 
 Examples:
 
-```
 ai test
 ai how do I zip this folder?
-ai "create a macro that backs up the project"
-ai "only output the command to make a new folder on Desktop"
-```
+ai create a macro that backs up this project
+ai only output the command to create a new folder on Desktop
+
+yaml
+Copy code
 
 The assistant:
-
-- Outputs short answers  
-- Generates valid CMC commands  
-- Behaves safely  
+- Gives short, useful answers
+- Outputs valid CMC commands
+- Avoids unsafe operations
+- Respects your current working directory
 
 ---
 
 ## 📚 Manuals
 
-### CMC_AI_Manual_MINI.md  
-Compressed, AI-optimized manual used by the assistant.
+### CMC_AI_Manual_MINI.md
+Compact, AI-optimized manual used by the embedded assistant.
 
-### CMC_AI_Manual.md  
-Large full documentation for advanced users or Better AI like chatGPT 5.1 or Grok AI.
+### CMC_AI_Manual_MEDIUM.md
+Full documentation for advanced users or external AI tools.
 
 ---
 
-## ✔ Troubleshooting
+## ✔ Notes & Limitations
 
+- Empty folders are not tracked by Git (Git limitation)
+- `.gitignore` rules are always respected
+- GitHub repository deletion affects GitHub only (local files stay intact)
+- CMC is designed for **local use**, not remote execution
+
+---
+
+## 🛠 Troubleshooting
+
+- Ensure Python is installed and on PATH  
 - Ensure Ollama is running  
-- Ensure Python is installed  
-- Re-run setup:  
-  ```
-  CMC_AI_Ollama_Setup.cmd
-  ```
+- Re-run setup if needed:
 
+CMC_AI_Ollama_Setup.cmd
+
+yaml
+Copy code
+
+---
+
+## 📌 Philosophy
+
+CMC is built around:
+- **Safety first**
+- **Explicit commands**
+- **No hidden automation**
+- **Offline-friendly tooling**
+
+If a command runs, it’s because *you* told it to.
+
+---
