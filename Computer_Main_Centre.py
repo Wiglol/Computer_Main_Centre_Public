@@ -3796,27 +3796,39 @@ Examples:
 """
 
     sec3 = """
-[bold]3. Search[/bold]
+[bold]3. Search & Indexing[/bold]
 -----------------------------------
 
-Folder-level search:
-• find '<pattern>'                Search in current folder
-• findext '.ext'                  Filter by extension
-• recent                          Newest files
-• biggest                         Largest files
+Folder-level search (current folder):
+• find '<pattern>'                Find files/folders by name
+• findext '.ext'                  Filter by extension (example: '.json')
+• recent                          Show newest files
+• biggest                         Show largest files
 
 Inside-file search:
-• search '<text>'                 Search file contents
+• search '<text>'                 Search contents inside files
 
-NOTE:
-Your current CMC version does NOT support /qfind or /qcount.
+Quick Path Index (fast global fuzzy search):
+• /qbuild <drive letters...>
+  Build/update the path index for the given drives.
+  Example:
+    /qbuild C D E
+
+• /find <query>
+  Global fuzzy-style search using the index (fast).
+  Example:
+    /find Atlauncher Server
+
+Notes:
+• Run /qbuild first (once per machine, rerun if drives change).
 
 Examples:
   find 'log'
   findext '.json'
   search 'error'
-  recent
-  biggest
+  /qbuild C D
+  /qfind taitaja toolkit
+  /find NBTExplorer 2.8
 """
 
     sec4 = """
@@ -3842,20 +3854,25 @@ Examples:
 [bold]5. Macros[/bold]
 -----------------------------------
 
-Macros = saved automation.
+Macros = saved automation (semicolon-separated chains).
 
-Real syntax (verified):
+Commands:
 • macro add <name> = <command>
 • macro run <name>
 • macro delete <name>
 • macro list
 • macro clear
 
+Tips:
+• Use single quotes around paths in macros.
+• Use variables: %HOME% %DATE% %NOW%
 
 Examples:
   macro add desk = cd '%HOME%/Desktop'
+  macro add publish = copy 'Computer_Main_Centre.py' to 'C:/Public/Computer_Main_Centre.py'
   macro run desk
 """
+
 
     sec6 = """
 [bold]6. Aliases[/bold]
@@ -3897,6 +3914,11 @@ You do NOT need to know normal git commands.
   Commit and push the current folder to the specified repository name.
   Useful if you want to relink the folder or push to a different repo.
 
+• git download <owner>/<repo>
+  Download (clone) any GitHub repository into the current CMC folder.
+  Works with any public repository and supported private repos.
+  This is equivalent to git clone, but simplified.
+
 • git status
   Show current Git status (changed, staged, clean).
 
@@ -3933,11 +3955,13 @@ Examples:
   git upload
   git update
   git update MyProject
+  git download Wiglol/Taitaja_Preparation
   git repo list
   git repo delete OldTestRepo
   git status
   git doctor
 """
+
 
 
     sec8 = """
@@ -3962,36 +3986,48 @@ Examples:
 """
 
     sec9 = """
-[bold]9. Automation[/bold]
+[bold]9. Automation & Execution[/bold]
 -----------------------------------
 
-Run programs:
-• run '<script>' [in '<folder>']
+Run programs / scripts:
+• run '<path>'
+• run '<script>' in '<folder>'
 
-Timers:
-• sleep <seconds>
-• timer <sec> [msg]
+Rules:
+• Paths MUST be wrapped in single quotes.
+• Use `in '<folder>'` when the program needs a working directory.
 
-Keys:
-• sendkeys "<text>{ENTER}"
+Supported:
+.py, .exe, .bat, .cmd, .vbs with proper working directory.
 
 Examples:
-  run 'start_server.bat'
-  run 'script.py' in 'C:/Project'
-  sleep 2
-  timer 10 "Done"
-  sendkeys "say Hello{ENTER}"
+  run 'script.py'
+  run 'start_server.bat' in 'C:/Servers/Forge'
+  run 'mcreator.exe' in 'C:/MCreator_1.9.1/MCreator191'
+  run 'C:/Tools/MyApp/app.exe'
+
+Timing:
+• sleep <seconds>
+• timer <seconds> [message]
+
+Input:
+• sendkeys "<text>{ENTER}"
 """
 
     sec10 = """
 [bold]10. Web & Downloads[/bold]
 -----------------------------------
 
-• open <url>
-• download '<url>' ['<file>']
-• download_list '<txtfile>'
-• youtube <query>
-• search web <query>
+Browser helpers:
+• search web <query>               Open a browser search
+• youtube <query>                  Search YouTube in browser
+
+Downloads:
+• download '<url>' ['<file>']      Download a file (optional output name)
+• download_list '<txtfile>'        Download many URLs listed in a text file
+
+Open:
+• open '<file/URL>'                    Opens a local file or URL
 
 Flags:
   ssl on/off
@@ -3999,35 +4035,71 @@ Flags:
 
 Examples:
   download 'https://example.com/app.zip' 'app.zip'
+  download_list '%HOME%/Desktop/links.txt'
   youtube "lofi"
   search web "java install"
 """
 
+
     sec11 = """
-[bold]11. Project & Web Setup[/bold]
+[bold]8. Web Projects[/bold]
 -----------------------------------
 
-• projectsetup
+Web helpers for Python & frontend projects.
+
 • websetup
+  Analyze the CURRENT folder.
+  Detects web project type (Flask, etc).
+  Offers recommended setup actions like:
+   - create virtual environment (venv)
+   - generate requirements.txt
+   - create start_server.bat
+   - create README.md
+
 • webcreate
+  Create a NEW web project from scratch.
+  Lets you choose:
+   - backend (Flask, etc)
+   - frontend (basic HTML, Vue, etc if available)
+  Generates folder structure and starter files.
+
+• projectsetup
+  General project wizard (not web-only).
+  Useful for non-web Python or mixed projects.
+
+Notes:
+• websetup is for EXISTING projects.
+• webcreate is for NEW projects.
+• All actions are confirmed before writing files.
 
 Examples:
-  projectsetup
   websetup
+  webcreate
+  projectsetup
 """
 
     sec12 = """
-[bold]12. Flags & Modes[/bold]
+[bold]12. Flags, Modes & Config[/bold]
 -----------------------------------
 
-• batch on/off
-• dry-run on/off
-• ssl on/off
+Modes:
+• batch on/off                     Auto-confirm prompts
+• dry-run on/off                   Preview actions without executing
+• ssl on/off                       Toggle SSL verification for downloads
+
+Config system:
+• config list
+• config get <key>
+• config set <key> <value>
+• config reset
 
 Examples:
   batch on
   dry-run off
   ssl off
+  config list
+  config set batch on
+  config get observer.auto
 """
 
     # ---------- Section Map ----------

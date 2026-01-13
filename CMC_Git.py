@@ -1,4 +1,5 @@
 import base64
+import os
 import datetime
 import json
 import re
@@ -22,6 +23,7 @@ from typing import Callable, Optional, Tuple, Union
 #   git status
 #   git log
 #   git doctor
+#   git download <owner>/<repo>  (clones to Desktop)
 #
 # Behavior:
 # - First run asks for a GitHub token (PAT) and stores it in:
@@ -230,6 +232,67 @@ def _warn_big_files(root: Path, limit_mb: int = 100) -> list[str]:
     return big
 
 
+
+def _desktop_dir() -> Path:
+    """Best-effort Desktop folder (supports OneDrive Desktop too)."""
+    home = Path.home()
+    d1 = home / "Desktop"
+    if d1.exists():
+        return d1
+    d2 = home / "OneDrive" / "Desktop"
+    if d2.exists():
+        return d2
+    return home
+
+
+def _parse_repo_spec(spec: str) -> Optional[Tuple[str, str]]:
+    """
+    Accepts:
+      - owner/repo
+      - https://github.com/owner/repo
+      - https://github.com/owner/repo.git
+      - git@github.com:owner/repo.git
+    Returns (owner, repo) or None.
+    """
+    s = (spec or "").strip().strip('"').strip("'")
+    if not s:
+        return None
+
+    if "github.com" in s.lower():
+        m = re.search(r"github\.com[/:]([^/]+)/([^/]+?)(?:\.git)?/?$", s, re.I)
+        if m:
+            owner = m.group(1).strip()
+            repo = m.group(2).strip()
+            if repo.lower().endswith(".git"):
+                repo = repo[:-4]
+            return owner, repo
+
+    if "/" in s:
+        owner, repo = s.split("/", 1)
+        owner = owner.strip()
+        repo = repo.strip()
+        if repo.lower().endswith(".git"):
+            repo = repo[:-4]
+        if owner and repo:
+            return owner, repo
+
+    return None
+
+
+def _looks_like_auth_error(out: str) -> bool:
+    o = (out or "").lower()
+    markers = [
+        "authentication failed",
+        "fatal: could not read username",
+        "fatal: could not read password",
+        "http 401",
+        "http 403",
+        "denied",
+        "repository not found",
+    ]
+    return any(m in o for m in markers)
+
+
 def _ensure_readme_if_empty(root: Path) -> None:
     # If there are no commits AND no changes staged, create README so first push exists.
     if _has_commits(root):
@@ -428,7 +491,7 @@ def handle_git_commands(raw: str, low: str, cwd: Union[str, Path], p: PFunc, RIC
         
         
        # ---- GitHub repo management ----
-    if cmd == "repo" and len(toks) >= 3 and toks[2].lower() == "list":
+    if cmd == "repo" and len(toks) >= 3 and toks[2] == "list":
         tok = _get_token(interactive=True)
         if not tok:
             p("[red]❌ No token provided.[/red]")
@@ -436,26 +499,24 @@ def handle_git_commands(raw: str, low: str, cwd: Union[str, Path], p: PFunc, RIC
 
         user = _gh_username(tok)
         if not user:
-            p("[red]❌ Bad credentials.[/red] Token can't access GitHub API (/user).")
+            p("[red]❌ Bad credentials.[/red]")
             return True
 
         repos = _gh_list_repos(tok)
-
         if not repos:
-            p("No repositories found (or GitHub API returned nothing).")
+            p("No repositories found.")
             return True
 
         p("Your GitHub repositories:")
         for r in repos:
-            name = r.get("name", "?")
             vis = "private" if r.get("private") else "public"
-            p(f"- {name} ({vis})")
+            p(f"- {r['name']} ({vis})")
         return True
 
-    if cmd == "repo" and len(toks) >= 4 and toks[2].lower() == "delete":
+    if cmd == "repo" and len(toks) >= 4 and toks[2] == "delete":
         repo = toks[3].strip()
         if not repo:
-            p("[red]❌ Missing repo name.[/red] Example: git repo delete MyRepo")
+            p("[red]❌ Missing repo name.[/red]")
             return True
 
         tok = _get_token(interactive=True)
@@ -465,7 +526,7 @@ def handle_git_commands(raw: str, low: str, cwd: Union[str, Path], p: PFunc, RIC
 
         user = _gh_username(tok)
         if not user:
-            p("[red]❌ Bad credentials.[/red] Token can't access GitHub API (/user).")
+            p("[red]❌ Bad credentials.[/red]")
             return True
 
         p("⚠️ This will permanently delete:")
@@ -479,6 +540,48 @@ def handle_git_commands(raw: str, low: str, cwd: Union[str, Path], p: PFunc, RIC
             p("🗑️ Repository deleted.")
         else:
             p("[red]❌ Failed to delete repository.[/red]")
+        return True
+
+
+
+
+     # ---- git download / clone ----
+    if cmd in ("download", "clone"):
+        if len(toks) < 3:
+            p("[red]❌ Usage:[/red] git download <owner>/<repo>")
+            return True
+
+        spec = toks[2].strip()
+
+        # Accept full GitHub URLs too
+        if spec.startswith("http://") or spec.startswith("https://"):
+            if "github.com/" not in spec:
+                p("[red]❌ Not a GitHub URL.[/red]")
+                return True
+            spec = spec.split("github.com/", 1)[1]
+            spec = spec.replace(".git", "").strip("/")
+
+        if "/" not in spec:
+            p("[red]❌ Use owner/repo format.[/red]")
+            return True
+
+        owner, repo = spec.split("/", 1)
+
+        target = start / repo
+        if target.exists():
+            p(f"[red]❌ Folder already exists:[/red] {target}")
+            return True
+
+        url = f"https://github.com/{owner}/{repo}.git"
+        p(f"⬇️ Cloning {url}")
+
+        try:
+            _git_run(["clone", url, repo], cwd=str(start))
+            p(f"📁 Installed to: {target}")
+        except Exception as e:
+            p(f"[red]❌ Clone failed:[/red] {e}")
+            return True
+
         return True
 
 
