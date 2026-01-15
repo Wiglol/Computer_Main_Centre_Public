@@ -2977,6 +2977,21 @@ def handle_command(s: str):
     # Normalize once
     low = s.lower()
     
+        # ---------- CMC Self Update ----------
+    if low in ("cmc update check", "cmc update"):
+        try:
+            from CMC_Update import cmc_update_check, cmc_update_apply
+            if low == "cmc update check":
+                cmc_update_check(p)
+            else:
+                # Update the folder where Computer_Main_Centre.py lives
+                here = Path(__file__).resolve().parent
+                cmc_update_apply(p, here)
+        except Exception as e:
+            p(f"[red]❌ CMC update failed:[/red] {e}" if RICH else f"CMC update failed: {e}")
+        return
+
+    
     # ---------- Git commands ----------
     try:
        from CMC_Git import handle_git_commands
@@ -3914,7 +3929,7 @@ You do NOT need to know normal git commands.
   Commit and push the current folder to the specified repository name.
   Useful if you want to relink the folder or push to a different repo.
 
-• git download <owner>/<repo>
+• git clone <owner>/<repo>
   Download (clone) any GitHub repository into the current CMC folder.
   Works with any public repository and supported private repos.
   This is equivalent to git clone, but simplified.
@@ -3924,7 +3939,11 @@ You do NOT need to know normal git commands.
 
 • git log
   Show recent commits (short format).
-
+  
+• git link <owner>/<repo>
+  Link the current folder to an existing GitHub repository
+  (required for GitHub Classroom and org repos)
+  
 • git doctor
   Diagnostic command.
   Shows:
