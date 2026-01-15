@@ -62,6 +62,7 @@ ensure_packages()
 # ---------- End of bootstrap ----------
 
 
+
 # ==========================================================
 #  Computer Main Centre  — Local AI Command Console
 # ==========================================================
@@ -110,6 +111,57 @@ except Exception:
     class _Dummy:
         def print(self, *a, **k): print(*a)
     console = _Dummy()
+    
+    
+    
+def cmc_update_status():
+    """
+    Returns:
+        "up_to_date" | "update_available" | "diverged" | "unknown"
+    Silent, fast, no printing.
+    """
+    try:
+        from pathlib import Path
+        import subprocess, shutil
+
+        here = Path(__file__).resolve().parent
+
+        if not shutil.which("git"):
+            return "unknown"
+
+        if not (here / ".git").exists():
+            return "unknown"
+
+        def git(args):
+            return subprocess.run(
+                ["git"] + args,
+                cwd=here,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            ).stdout.strip()
+
+        git(["fetch", "--quiet"])
+
+        local = git(["rev-parse", "HEAD"])
+        remote = git(["rev-parse", "origin/main"])
+
+        if local == remote:
+            return "up_to_date"
+
+        behind = int(git(["rev-list", "--count", "HEAD..origin/main"]) or "0")
+        ahead = int(git(["rev-list", "--count", "origin/main..HEAD"]) or "0")
+
+        if behind > 0 and ahead == 0:
+            return "update_available"
+
+        return "diverged"
+
+    except Exception:
+        return "unknown"
+        
+        
+        
 
 # ---------- Safe Rich print wrapper (global early definition) ----------
 def p(x):
@@ -157,7 +209,12 @@ STATE = {
     "ssl_verify": True,
     "history": [str(CWD)]
 }
+
+# --- Detect CMC update status once per session ---
+STATE["cmc_update_status"] = cmc_update_status()
+
 LOG = []    # list of strings
+
 
 
 # ---------- Config (persistent settings) ----------
@@ -403,18 +460,40 @@ def show_header():
       • Batch / SSL / Dry-Run status
       • A helpful hint for new users
       • Active Java version (auto-detected)
+      • CMC update status
     """
     title_line = "Computer Main Centre"
+
     status = (
         f"Batch: {'ON' if STATE['batch'] else 'OFF'}  |  "
         f"SSL: {'ON' if STATE['ssl_verify'] else 'OFF'}  |  "
         f"Dry-Run: {'OFF' if not STATE['dry_run'] else 'ON'}"
     )
+
     hint_line = "Explore commands with ‘help’"
-    # ensure Java line updates dynamically
+
+    # Java line (dynamic)
     java_version = STATE.get("java_version") or detect_java_version()
     java_line = f"Java: {java_version} (Active)"
-    content = f"Local command console\n{status}\n{hint_line}\n{java_line}"
+
+    # --- CMC update status line ---
+    upd = STATE.get("cmc_update_status", "unknown")
+    if upd == "up_to_date":
+        update_line = "[green]CMC: Up to date[/green]"
+    elif upd == "update_available":
+        update_line = "[yellow]CMC: Update available[/yellow]"
+    elif upd == "diverged":
+        update_line = "[red]CMC: Local changes[/red]"
+    else:
+        update_line = "[dim]CMC: Unknown[/dim]"
+
+    content = (
+        "Local command console\n"
+        f"{status}\n"
+        f"{hint_line}\n"
+        f"{java_line}\n"
+        f"{update_line}"
+    )
 
     if RICH:
         console.print(f"[bold]{title_line}[/bold]")
@@ -422,6 +501,7 @@ def show_header():
     else:
         print(title_line)
         print(content)
+
 
 
 def status_panel():
@@ -433,12 +513,15 @@ def status_panel():
         f"SSL: {'ON' if STATE['ssl_verify'] else 'OFF'}  |  "
         f"Dry-Run: {'OFF' if not STATE['dry_run'] else 'ON'}"
     )
+
+    upd = STATE.get("cmc_update_status", "unknown")
+    status += f"  |  CMC: {upd.replace('_', ' ').title()}"
+
     if RICH:
         panel = Panel.fit(status, title="Computer Main Centre", border_style="cyan")
         console.print(panel)
     else:
         print(status)
-
 
 
 
