@@ -4006,27 +4006,31 @@ You do NOT need to know normal git commands.
 
 • git update
   Commit and push changes from the current folder to its linked repository.
-  Uses the saved folder → repository mapping automatically.
+  Uses the saved folder → repo mapping automatically.
 
 • git update <repo>
   Commit and push the current folder to the specified repository name.
-  Useful if you want to relink the folder or push to a different repo.
+  Useful for relinking the folder or pushing to a different repo.
 
-• git clone <owner>/<repo>
+• git update <repo> --add <file/folder name>
+  Commit and push ONLY the specified file or folder.
+  Other changes in the folder are ignored.
+  
+• git download <owner>/<repo>
   Download (clone) any GitHub repository into the current CMC folder.
-  Works with any public repository and supported private repos.
-  This is equivalent to git clone, but simplified.
+  Works with public repos and private repos you have access to.
+  Simplified alternative to git clone.
+
+• git link <owner>/<repo>
+  Link the current folder to an existing GitHub repository.
+  Required for GitHub Classroom and organization repositories.
 
 • git status
   Show current Git status (changed, staged, clean).
 
 • git log
   Show recent commits (short format).
-  
-• git link <owner>/<repo>
-  Link the current folder to an existing GitHub repository
-  (required for GitHub Classroom and org repos)
-  
+
 • git doctor
   Diagnostic command.
   Shows:
@@ -4037,12 +4041,11 @@ You do NOT need to know normal git commands.
    - saved folder → repository mapping
 
 • git repo list
-  List all GitHub repositories owned by your account.
-  Shows repository names and whether they are public or private.
-  Useful for copying repo names for other commands.
+  List GitHub repositories accessible by your account
+  (includes Classroom, forks, and organization repos).
 
 • git repo delete <repo>
-  Permanently delete a GitHub repository by name.
+  Permanently delete a GitHub repository you own.
   Requires typing DELETE to confirm.
   This action is irreversible.
 
@@ -4052,12 +4055,14 @@ Notes:
 • Empty folders are not tracked by Git.
 • .gitignore rules are always respected.
 • Repository deletion affects GitHub only (local files are untouched).
+• GitHub Classroom repos may require `git pull` before `git update`.
 
 Examples:
   git upload
   git update
   git update MyProject
   git download Wiglol/Taitaja_Preparation
+  git link prakticum3k/html-ovn1-Wiglol
   git repo list
   git repo delete OldTestRepo
   git status
@@ -4594,4 +4599,4 @@ if __name__ == "__main__":
     main()
 
 
-# // test: autopublish checkssss
+
