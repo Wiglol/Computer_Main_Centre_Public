@@ -524,7 +524,12 @@ def maybe_show_update_notes():
 
         version = ver_file.read_text(encoding="utf-8", errors="ignore").strip()
         if not version:
-            return
+            # Fallback: show once per *content*, not per file timestamp
+            import hashlib
+            data = notes_file.read_bytes()
+            version = "notes-" + hashlib.sha1(data).hexdigest()[:10]
+
+
 
         seen = ""
         if seen_file.exists():
