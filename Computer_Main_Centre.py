@@ -3992,30 +3992,37 @@ Examples:
 """
 
     sec7 = """
+    
 [bold]7. Git (GitHub publishing)[/bold]
 -----------------------------------
 
 CMC provides a simplified Git workflow focused on fast publishing.
-You do NOT need to know normal git commands.
+You usually do NOT need normal git commands.
+
+[bold]Core commands[/bold]
 
 • git upload
   Create a new GitHub repository from the current folder.
   Asks for repo name, public/private, and commit message.
-  Automatically commits, pushes, saves the folder → repo mapping,
-  and opens the repository in the browser.
+  Automatically initializes git (if needed), commits, pushes,
+  saves the folder → repo mapping, and opens the repo in the browser.
 
 • git update
   Commit and push changes from the current folder to its linked repository.
   Uses the saved folder → repo mapping automatically.
 
-• git update <repo>
-  Commit and push the current folder to the specified repository name.
+• git update "<message>"
+  Commit + push using a commit message (without changing the repo link).
+  Tip: If your message has spaces, wrap it in quotes.
+
+• git update <owner>/<repo> ["message"]
+  Commit and push the current folder to a specific GitHub repo.
   Useful for relinking the folder or pushing to a different repo.
 
-• git update <repo> --add <file/folder name>
-  Commit and push ONLY the specified file or folder.
-  Other changes in the folder are ignored.
-  
+• git update <owner>/<repo> ["message"] --add <file/folder>
+  Commit and push ONLY the specified file/folder (partial commit).
+  Other changes are ignored.
+
 • git download <owner>/<repo>
   Download (clone) any GitHub repository into the current CMC folder.
   Works with public repos and private repos you have access to.
@@ -4024,6 +4031,26 @@ You do NOT need to know normal git commands.
 • git link <owner>/<repo>
   Link the current folder to an existing GitHub repository.
   Required for GitHub Classroom and organization repositories.
+
+[bold]Self-healing commands (recommended when git is cursed)[/bold]
+
+• git force upload
+  Like git upload, but tries to auto-fix common problems:
+  - missing repo init
+  - wrong branch / missing main
+  - missing first commit (refspec issues)
+  - index.lock problems
+  - origin mismatch (when a real repo is provided)
+  If it still fails, it creates a big debug report file.
+
+• git force update [<owner>/<repo>] ["message"] [--add <file/folder>]
+  Like git update, but aggressively repairs common issues and retries push.
+  Uses pull --rebase when needed and may use force-with-lease as last resort.
+
+• git debug upload / git debug update ...
+  Same as force, but also prints the steps it performed.
+
+[bold]Diagnostics / extras[/bold]
 
 • git status
   Show current Git status (changed, staged, clean).
@@ -4039,12 +4066,13 @@ You do NOT need to know normal git commands.
    - whether Git is installed
    - whether a GitHub token is stored
    - saved folder → repository mapping
+   - origin remote info (if present)
 
-• git repo list
+• git repo list [all|mine]
   List GitHub repositories accessible by your account
   (includes Classroom, forks, and organization repos).
 
-• git repo delete <repo>
+• git repo delete <owner>/<repo>   (or: git repo delete <repoName>)
   Permanently delete a GitHub repository you own.
   Requires typing DELETE to confirm.
   This action is irreversible.
@@ -4053,21 +4081,29 @@ Notes:
 • Git commands use the CMC working directory (shown in the prompt).
 • GitHub token is requested once and stored locally.
 • Empty folders are not tracked by Git.
-• .gitignore rules are always respected.
+• CMC creates/updates a .gitignore (rules are always respected).
 • Repository deletion affects GitHub only (local files are untouched).
 • GitHub Classroom repos may require `git pull` before `git update`.
+• If you see an origin containing "<you>", fix it with `git link owner/repo`.
 
 Examples:
   git upload
   git update
-  git update MyProject
-  git download Wiglol/Taitaja_Preparation
-  git link prakticum3k/html-ovn1-Wiglol
+  git update "Update 1"
+  git update MyAcc/MyRepo "Update 2"
+  git update MyAcc/MyRepo "Update only one file" --add src/main.py
+  git force upload
+  git force update
+  git debug update MyAcc/MyRepo "Debugging this push"
+  git download MyAcc/Test123
+  git link OrgOrOwner/RepoName
   git repo list
-  git repo delete OldTestRepo
+  git repo delete MyAcc/OldTestRepo
   git status
   git doctor
 """
+
+
 
 
 
