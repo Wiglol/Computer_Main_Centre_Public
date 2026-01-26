@@ -475,6 +475,11 @@ def show_header():
     # Java line (dynamic)
     java_version = STATE.get("java_version") or detect_java_version()
     java_line = f"Java: {java_version} (Active)"
+    
+    ai_model = get_ai_model()
+    ai_status = "Ready" if HAVE_ASSISTANT else "Not configured"
+    ai_line = f"AI: {ai_model} ({ai_status})"
+
 
     # --- CMC update status line ---
     upd = STATE.get("cmc_update_status", "unknown")
@@ -492,6 +497,7 @@ def show_header():
         f"{status}\n"
         f"{hint_line}\n"
         f"{java_line}\n"
+        f"{ai_line}\n"
         f"{update_line}"
     )
 
@@ -502,26 +508,107 @@ def show_header():
         print(title_line)
         print(content)
 
+def maybe_show_update_notes():
+    """
+    Shows UpdateNotes/LATEST.txt once per VERSION.txt (after an update).
+    """
+    try:
+        base = Path(__file__).resolve().parent
+        notes_dir = base / "UpdateNotes"
+        notes_file = notes_dir / "LATEST.txt"
+        ver_file = notes_dir / "VERSION.txt"
+        seen_file = notes_dir / "SEEN_VERSION.txt"
+
+        if not notes_file.exists() or not ver_file.exists():
+            return
+
+        version = ver_file.read_text(encoding="utf-8", errors="ignore").strip()
+        if not version:
+            return
+
+        seen = ""
+        if seen_file.exists():
+            seen = seen_file.read_text(encoding="utf-8", errors="ignore").strip()
+
+        if seen == version:
+            return  # already shown for this update
+
+        text = notes_file.read_text(encoding="utf-8", errors="ignore").strip()
+        if not text:
+            # still mark as seen so it doesn't spam
+            seen_file.write_text(version, encoding="utf-8")
+            return
+
+        title = f"What's new in CMC ({version})"
+
+        if RICH:
+            console.print(Panel.fit(text, title=title, border_style="cyan"))
+        else:
+            print("\n" + "=" * 70)
+            print(title)
+            print("=" * 70)
+            print(text)
+            print("=" * 70 + "\n")
+
+        # mark as shown
+        notes_dir.mkdir(parents=True, exist_ok=True)
+        seen_file.write_text(version, encoding="utf-8")
+
+    except Exception:
+        # Never block startup because of notes.
+        return
+
+
+
+def get_ai_model() -> str:
+    # Prefer config value, then assistant_core runtime, then default
+    try:
+        m = (CONFIG or {}).get("ai", {}).get("model")
+        if m:
+            return str(m)
+    except Exception:
+        pass
+    try:
+        import assistant_core
+        m = getattr(assistant_core, "_OLLAMA_MODEL", None)
+        if m:
+            return str(m)
+    except Exception:
+        pass
+    return "qwen2.5:7b-instruct"
 
 
 def status_panel():
-    """
-    Displays current Centre status and toggles.
-    """
-    status = (
-        f"Batch: {'ON' if STATE['batch'] else 'OFF'}  |  "
-        f"SSL: {'ON' if STATE['ssl_verify'] else 'OFF'}  |  "
-        f"Dry-Run: {'OFF' if not STATE['dry_run'] else 'ON'}"
-    )
+    batch = "ON" if STATE["batch"] else "OFF"
+    ssl = "ON" if STATE["ssl_verify"] else "OFF"
+    dry = "ON" if STATE["dry_run"] else "OFF"
 
     upd = STATE.get("cmc_update_status", "unknown")
-    status += f"  |  CMC: {upd.replace('_', ' ').title()}"
-
-    if RICH:
-        panel = Panel.fit(status, title="Computer Main Centre", border_style="cyan")
-        console.print(panel)
+    if upd == "up_to_date":
+        update_line = "[green]CMC: Up to date[/green]"
+    elif upd == "update_available":
+        update_line = "[yellow]CMC: Update available[/yellow]"
+    elif upd == "diverged":
+        update_line = "[red]CMC: Local changes[/red]"
     else:
-        print(status)
+        update_line = "[dim]CMC: Unknown[/dim]"
+
+    ai_line = f"AI: {get_ai_model()} ({'Ready' if HAVE_ASSISTANT else 'Not configured'})"
+
+    return "\n".join([
+        f"Batch: {batch} | SSL: {ssl} | Dry-Run: {dry}",
+        ai_line,
+        update_line,
+    ])
+    
+def show_status_box():
+    content = status_panel()
+    if RICH:
+        console.print(Panel.fit(content, title="Status", border_style="cyan"))
+    else:
+        print(content)
+
+
 
 
 
@@ -2756,7 +2843,7 @@ def macro_clear():
 # ---------- Suggestions for partial commands ----------
 COMMAND_HINTS = [
     "pwd","cd","back","home","list","info","find","findext","count","recent","biggest","search",
-    "create file","create folder","write","read","move","copy","rename","delete",
+    "create file","create folder","write","read","move","copy","rename","delete", "ai-model list", "ai-model current" , "ai-model set <model>" , "model list" , "model current" , "model set <model>"
     "zip","unzip","open","explore","backup","run",
     "download","downloadlist","open url",
     "batch on","batch off","dry-run on","dry-run off","ssl on","ssl off","status","log","undo",
@@ -2910,60 +2997,89 @@ def handle_command(s: str):
 
 
     # ---------- AI model manager ----------
+    # Allow "model ..." as an alias for "ai-model ..."
+    if low.startswith("model"):
+        s = "ai-model" + s[len("model"):]
+        low = s.lower()
+
     if low.startswith("ai-model"):
         parts = s.split()
 
-        # Help / usage
-        if len(parts) == 1 or parts[1] in ("help", "?"):
+        if len(parts) == 1 or (len(parts) >= 2 and parts[1].lower() in ("help", "?", "-h", "--help")):
             p("Usage:")
             p("  ai-model list")
             p("  ai-model current")
             p("  ai-model set <model>")
+            p("Alias:")
+            p("  model list|current|set <model>")
             return
 
         sub = parts[1].lower()
 
-        # ai-model list
         if sub == "list":
             try:
-                import subprocess
-                out = subprocess.check_output(["ollama", "list"], text=True)
-                p("Available models:")
+                out = subprocess.check_output(["ollama", "list"], stderr=subprocess.STDOUT, text=True)
+                names = []
                 for line in out.splitlines():
-                    if ":" in line:
-                        name = line.split()[0]
+                    line = line.strip()
+                    if not line:
+                        continue
+                    head = line.split()[0]
+                    if head.upper() == "NAME":
+                        continue
+                    names.append(head)
+
+                if not names:
+                    p("[yellow]No models found (ollama list returned no entries).[/yellow]")
+                else:
+                    p("Available models:")
+                    for name in names:
                         p(f"  - {name}")
-            except Exception:
-                p("[red]Failed to list Ollama models.[/red]")
+            except Exception as e:
+                p(f"[red]Failed to list Ollama models.[/red] {e}")
             return
 
-        # ai-model current
         if sub == "current":
-            import CMC_Config
-            cfg = CMC_Config.load_config()
-            model = cfg.get("ai", {}).get("model", "qwen2.5:7b-instruct")
-            p(f"Current AI model: {model}")
+            p(f"Current AI model: {get_ai_model()}")
             return
 
-        # ai-model set <model>
-        if sub == "set" and len(parts) >= 3:
-            new_model = parts[2]
-            import CMC_Config, assistant_core
+        if sub == "set":
+            if len(parts) < 3:
+                p("[red]Missing model name.[/red] Example: ai-model set qwen2.5:7b-instruct")
+                return
+            new_model = parts[2].strip()
 
-            cfg = CMC_Config.load_config()
-            cfg.setdefault("ai", {})["model"] = new_model
-            CMC_Config.save_config(cfg)
+            # Update config in-place (no global needed)
+            try:
+                if not isinstance(CONFIG, dict):
+                    p("[red]CONFIG is not a dict; can't store model setting.[/red]")
+                    return
+                CONFIG.setdefault("ai", {})["model"] = new_model
+            except Exception as e:
+                p(f"[red]Failed to update CONFIG.[/red] {e}")
+                return
 
-            # Sync assistant_core internal model + manual cache
-            assistant_core._OLLAMA_MODEL = new_model
-            assistant_core.clear_manual_cache()
+            # Persist if possible
+            try:
+                if callable(save_config):
+                    save_config(CONFIG, Path(__file__).parent)
+            except Exception:
+                pass
 
-            p(f"AI model updated to: {new_model}")
+            # Sync assistant runtime if available
+            try:
+                import assistant_core
+                if hasattr(assistant_core, "_OLLAMA_MODEL"):
+                    assistant_core._OLLAMA_MODEL = new_model
+                if hasattr(assistant_core, "clear_manual_cache"):
+                    assistant_core.clear_manual_cache()
+            except Exception:
+                pass
+
+            p(f"[green]AI model updated to:[/green] {new_model}")
             return
 
-        # Unknown ai-model subcommand
-        p("[red]Unknown ai-model command.[/red]")
-        return
+
 
 
 
@@ -3198,7 +3314,8 @@ def handle_command(s: str):
         show_help(topic)
         return
     if low == "status":
-        status_panel(); return
+        show_status_box()
+        return
     if low == "batch on":
         STATE["batch"] = True; log_action("BATCH ON"); p("Batch ON"); return
     if low == "batch off":
@@ -4108,7 +4225,7 @@ Examples:
 
 
     sec8 = """
-[bold]8. Java & Servers[/bold]
+[bold]8. Java [/bold]
 -----------------------------------
 
 Java:
@@ -4116,11 +4233,6 @@ Java:
 • java version
 • java change <8|17|21>
 • java reload
-
-Project helpers:
-• projectsetup
-• websetup
-• webcreate
 
 Examples:
   java list
@@ -4222,6 +4334,45 @@ Examples:
 """
 
     sec12 = """
+[bold]8. AI (Local assistant & models)[/bold]
+-----------------------------------
+
+CMC can run a local AI assistant (Ollama-based) and lets you control the model.
+
+• ai <question>
+  Ask the assistant directly from CMC.
+  Example:
+    ai explain this error: ModuleNotFoundError
+
+• model list
+  List installed local models (from `ollama list`).
+
+• model current
+  Show the model CMC is currently configured to use.
+
+• model set <model>
+  Switch the active model used by CMC.
+  Example:
+    ai-model set qwen2.5:7b-instruct
+
+
+Notes:
+• If Ollama is not installed or running, model listing may fail.
+• If model is not working or installed go to your CMC folder and open CMC_AI_Ollama_Setup.cmd
+• Model names must match `ollama list`.
+• `status` shows the current AI model if enabled.
+
+
+Examples:
+  ai hello, what can you do?
+  ai-model list
+  ai-model current
+  ai-model set llama3.1:8b
+  model set qwen2.5:7b-instruct
+"""
+
+
+    sec13 = """
 [bold]12. Flags, Modes & Config[/bold]
 -----------------------------------
 
@@ -4258,7 +4409,8 @@ Examples:
         "9": ("Automation", sec9),
         "10": ("Web & downloads", sec10),
         "11": ("Project & web setup", sec11),
-        "12": ("Flags & modes", sec12),
+        "12": ("AI models & commands", sec12),
+        "13": ("Flags & modes", sec13),
     }
 
     # ---------- Aliases ----------
@@ -4295,7 +4447,9 @@ Type `help <number>` to open a section or use: help all
   9. Automation
  10. Web & downloads
  11. Project & web setup
- 12. Flags & modes
+ 12. AI models & commands
+ 13. Flags & modes
+
 """
         _panel("CMC Help – categories", menu)
         return
@@ -4451,6 +4605,8 @@ def complete_command(text, state):
 
     # Control
     "help", "exit"
+    
+    "ai-model list" , "ai-model current" , "ai-model set" , "model list" , "model current" , "model set"
 ]
 
     cmds += list(MACROS.keys())  # include macro names
@@ -4596,6 +4752,9 @@ style = Style.from_dict({
 def main():
     global CWD
     show_header()
+    
+    # Show update notes once after an update (if UpdateNotes/LATEST.txt exists)
+    maybe_show_update_notes()
 
     # Ensure macros are always loaded fresh from disk
     global MACROS

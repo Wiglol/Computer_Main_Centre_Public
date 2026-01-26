@@ -56,6 +56,22 @@ def _save_state(d: dict) -> None:
         STATE_FILE.write_text(json.dumps(d, indent=2), encoding="utf-8")
     except Exception:
         pass
+        
+def _write_update_notes_version(cmc_folder: Path, version: str) -> None:
+    """
+    Ensures UpdateNotes/VERSION.txt exists and is set to `version`.
+    LATEST.txt is NOT modified (you maintain that in the repo).
+    """
+    try:
+        notes_dir = Path(cmc_folder) / "UpdateNotes"
+        notes_dir.mkdir(parents=True, exist_ok=True)
+
+        ver_file = notes_dir / "VERSION.txt"
+        ver_file.write_text(str(version).strip() + "\n", encoding="utf-8")
+    except Exception:
+        # Never fail the update because of notes bookkeeping
+        pass
+
 
 def _latest_sha(repo: str = DEFAULT_REPO, branch: str = DEFAULT_BRANCH) -> str | None:
     # GitHub API: latest commit on branch
@@ -235,6 +251,8 @@ def cmc_update_apply(
             state = _load_state()
             state["installed_sha"] = sha
             _save_state(state)
+            
+            _write_update_notes_version(cmc_folder, sha)
 
             p("✅ Update applied via git.")
             p("⚠️ Restart CMC to load the new code (close and re-open).")
@@ -303,6 +321,8 @@ def cmc_update_apply(
 
     state["installed_sha"] = latest
     _save_state(state)
+    
+    _write_update_notes_version(cmc_folder, latest)
 
     p("✅ Update applied.")
     p("⚠️ Restart CMC to load the new code (close and re-open).")

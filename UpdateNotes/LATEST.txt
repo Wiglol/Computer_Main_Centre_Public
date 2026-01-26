@@ -1,0 +1,29 @@
+Computer Main Centre - Release Notes (27/01/2026)
+
+[ AI / File Access ]
+
+- Removed all Observer-related code and endpoints
+
+- AI no longer has direct filesystem/Observer access
+
+- AI now operates only through available CMC commands and user-provided context
+
+[ Header / Status ]
+
+- Added active AI model display to the header/status box (example: AI: qwen2.5:7b-instruct)
+
+[ Help / Docs ]
+
+- Added a new Help section: AI models & commands
+
+[ GitHub / Git Helpers ]
+
+- Added Git “force/debug” style helpers to recover from common failures automatically
+
+- Improved reliability for messy states (wrong branch/upstream/origin, missing main, etc.)
+
+- Better debug output when something still fails (so you can actually diagnose it)
+
+[ Default .gitignore ]
+
+- Updated the default .gitignore CMC generates to be more general-purpose and safer

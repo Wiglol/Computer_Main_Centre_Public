@@ -242,14 +242,26 @@ CMC supports two Git layers:
 ## 7.1 Friendly Git commands (user-facing)
 - `git upload`
 - `git update` (uses saved mapping)
-- `git update <repo>` (override)
-- `git clone <owner>/<repo>`
-- `git link <owner>/<repo>`
+- `git update "<message>"` (treat quoted text as commit message; does not change repo link)
+- `git update <owner>/<repo> ["message"]` (relink + push)
+- `git update <owner>/<repo> ["message"] --add <file-or-folder>` (partial commit)
+- `git download <owner>/<repo>` (some builds also accept `git clone <owner>/<repo>`)
+- `git link <owner>/<repo>` (or GitHub URL)
 - `git status`
 - `git log`
 - `git doctor`
 - `git repo list`
-- `git repo delete <repo>`
+- `git repo delete <owner>/<repo>`
+
+Self-healing (when git is cursed):
+- `git force upload`
+- `git force update [<owner>/<repo>] ["message"] [--add <path>]`
+- `git debug upload`
+- `git debug update [<owner>/<repo>] ["message"] [--add <path>]`
+
+Notes:
+- Force/debug tries to auto-fix common issues (refspec/main, wrong branch, index.lock, origin problems).
+- If origin contains placeholder like `<you>`, fix with `git link owner/repo` before pushing.
 
 Safety:
 - `git repo delete` is irreversible on GitHub (local untouched)
